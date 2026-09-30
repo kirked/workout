@@ -186,6 +186,9 @@ main {
 .chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
 .chip { font-size: 13px; font-weight: 500; padding: 3px 9px; border-radius: 20px; background: var(--accent-soft); color: var(--accent); }
 .chip.rest { background: var(--fill); color: var(--muted); }
+.chip.ok { display: inline-flex; align-items: center; gap: 3px; flex: 0 0 auto; }
+.chip.ok .ico { width: 14px; height: 14px; stroke-width: 2.6; }
+.row-ico { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 9px; background: var(--accent-soft); color: var(--accent); flex: 0 0 auto; }
 
 /* ---------- Workout ---------- */
 .wo-sec { padding: 4px 0; }
@@ -632,9 +635,9 @@ function toast(msg) {
 let view = { name: 'home' };
 let histReturn = null;               // view to return to when the history button is toggled off
 const extraSets = {};                // `${date}_${exId}` -> set count added during this session
-const TITLES = { home: 'Workout', pick: 'Workout', workout: 'Workout', exercises: 'Exercises', schedule: 'Schedule', history: 'History' };
-const TABS = [['home', 'Workout', ICON.dumbbell], ['exercises', 'Exercises', ICON.list], ['schedule', 'Schedule', ICON.cal]];
-const tabOf = n => ({ home: 'home', pick: 'home', workout: 'home', exercises: 'exercises', schedule: 'schedule' }[n] || '');
+const TITLES = { home: 'Workout', past: 'Workout', pick: 'Workout', workout: 'Workout', exercises: 'Exercises', schedule: 'Schedule', history: 'History' };
+const TABS = [['exercises', 'Exercises', ICON.list], ['schedule', 'Schedule', ICON.cal], ['home', 'Workout', ICON.dumbbell]];
+const tabOf = n => ({ home: 'home', past: 'home', pick: 'home', workout: 'home', exercises: 'exercises', schedule: 'schedule' }[n] || '');
 
 const Views = {};
 const Mount = {};
@@ -665,6 +668,8 @@ Views.home = () => {
         : `<button class="btn primary big" data-act="start">${logged.length ? 'Resume Workout' : 'Start Workout'}</button>`}
       ${sched.length || logged.length ? '<button class="btn link" data-act="pick">Ad-hoc Workout</button>' : ''}
     </section>
+    <div class="card list"><button class="row" data-act="past"><span class="row-ico">${ICON.cal}</span>
+      <div class="row-main"><div class="row-title">Log a past workout</div><div class="row-sub">Any day in the last month</div></div>${ICON.chev}</button></div>
     ${recent.length ? `<h3 class="section-h">Recent workouts</h3>
     <div class="card list">${recent.map(w => {
       const ids = [...w.bpIds];
@@ -675,10 +680,46 @@ Views.home = () => {
     }).join('')}</div>` : ''}`;
 };
 
+/** Same calendar day one month earlier (clamped to that month's last day). */
+function monthAgo(d) {
+  const last = new Date(d.getFullYear(), d.getMonth(), 0).getDate();
+  return new Date(d.getFullYear(), d.getMonth() - 1, Math.min(d.getDate(), last));
+}
+
+Views.past = () => {
+  const t = pdate(today()), from = monthAgo(t);
+  const counts = new Map(recentWorkouts(Infinity).map(w => [w.date, w.count]));
+  const monday = d => new Date(d.getFullYear(), d.getMonth(), d.getDate() - (d.getDay() + 6) % 7).getTime();
+  const thisWeek = monday(t);
+  let html = '', week = null;
+  for (let d = new Date(t.getFullYear(), t.getMonth(), t.getDate() - 1); d >= from; d.setDate(d.getDate() - 1)) {
+    const ds = dstr(d), wk = monday(d);
+    if (wk !== week) {
+      if (week !== null) html += '</div>';
+      const weeksAgo = Math.round((thisWeek - wk) / (7 * 864e5));
+      const label = weeksAgo === 0 ? 'This week' : weeksAgo === 1 ? 'Last week' : `Week of ${fmtDate(dstr(new Date(wk))).replace(/^\w+ /, '')}`;
+      html += `<h3 class="section-h">${esc(label)}</h3><div class="card list">`;
+      week = wk;
+    }
+    const logged = loggedBps(ds), sched = scheduledFor(ds), n = counts.get(ds) || 0;
+    const sub = logged.length ? `${names(logged)} · ${n} set${n === 1 ? '' : 's'}`
+      : sched.length ? `Scheduled: ${names(sched)}` : 'Nothing scheduled';
+    const status = !logged.length ? '' : isDayDone(ds) ? `<span class="chip ok">${ICON.check}Done</span>` : '<span class="chip rest">Partial</span>';
+    html += `<button class="row" data-act="past-day" data-date="${ds}"><div class="row-main">
+      <div class="row-title">${esc(fmtDate(ds))}</div><div class="row-sub">${sub}</div></div>${status}${ICON.chev}</button>`;
+  }
+  if (week !== null) html += '</div>';
+  return `<div class="page-head"><div class="kicker">Log a past workout</div><h1>Choose a day</h1>
+    <div class="legend">Days with nothing logged let you pick a body part.</div></div>${html}`;
+};
+
 Views.pick = v => {
   const sched = new Set(scheduledFor(v.date).map(b => b.id));
+  const all = sched.size > 1 ? `<button class="row" data-act="pick-sched"><div class="row-main">
+      <div class="row-title">${names(scheduledFor(v.date))} <span class="badge">Scheduled</span></div>
+      <div class="row-sub">All scheduled body parts</div></div>${ICON.chev}</button>` : '';
   return `<div class="page-head"><div class="kicker">${esc(fmtDateLong(v.date))}</div><h1>Choose a body part</h1></div>
-    <div class="card list">${bps().map(b => {
+    <div class="card list">${all}${bps().map(b => {
       const n = exsOf(b.id).length;
       return `<button class="row" data-act="pick-bp" data-bp="${b.id}"><div class="row-main">
         <div class="row-title">${esc(b.name)}${sched.has(b.id) ? ' <span class="badge">Scheduled</span>' : ''}</div>
@@ -1146,7 +1187,13 @@ const A = {
   },
   start: () => startWorkout(),
   pick: () => go({ name: 'pick', date: today() }),
-  'pick-bp': el => go({ name: 'workout', date: view.date || today(), bpIds: [el.dataset.bp] }),
+  'pick-bp': el => go({ name: 'workout', date: view.date || today(), bpIds: [el.dataset.bp], from: view.from }),
+  'pick-sched': () => go({ name: 'workout', date: view.date, bpIds: scheduledFor(view.date).map(b => b.id), from: view.from }),
+  past: () => go({ name: 'past' }),
+  'past-day': el => {
+    const date = el.dataset.date, logged = loggedBps(date).map(b => b.id);
+    go(logged.length ? { name: 'workout', date, bpIds: logged, from: 'past' } : { name: 'pick', date, from: 'past' });
+  },
   'open-wo': el => go({ name: 'workout', date: el.dataset.date, bpIds: el.dataset.bps.split(',').filter(id => Store.bp.has(id)) }),
   'add-set': el => {
     const ex = el.dataset.ex, n = +el.dataset.count + 1;
@@ -1175,7 +1222,7 @@ const A = {
     const n = [...Store.set.values()].filter(r => r.date === view.date && view.bpIds.includes(r.bpId)).length;
     if (n) setCfg(`done.${view.date}`, true);
     toast(n ? `Workout saved · ${n} set${n === 1 ? '' : 's'}` : 'No sets logged');
-    go({ name: 'home' });
+    go({ name: view.from || 'home' });
   },
   sample: () => { loadSample(); go({ name: 'exercises' }); },
   'bp-add': async () => {

@@ -116,6 +116,8 @@ h1, h2, h3 { margin: 0; }
 .icon-btn:active { background: var(--fill); }
 .icon-btn.on { background: var(--accent); color: #fff; }
 .icon-btn.sm { width: 30px; height: 30px; border-radius: 15px; background: var(--fill); }
+.icon-btn:disabled { opacity: .3; cursor: default; }
+.set-btns { display: flex; gap: 6px; flex: 0 0 auto; }
 .unit-toggle {
   display: inline-flex; padding: 2px; border: 0; border-radius: 9px;
   background: var(--fill); height: 32px; align-items: stretch;
@@ -193,8 +195,17 @@ main {
 /* ---------- Workout ---------- */
 .wo-sec { padding: 4px 0; }
 .sec-title { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px 4px 16px; font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; color: var(--accent); }
-.ex { padding: 12px 12px 14px 14px; border-top: .5px solid var(--sep); }
+.ex { position: relative; overflow: hidden; border-top: .5px solid var(--sep); touch-action: pan-y; }
 .wo-sec > .ex:first-child, .sec-title + .ex { border-top: 0; }
+/* Swipe left to reveal Delete: .ex-main slides over the button. */
+.ex-main { position: relative; padding: 12px 12px 14px 14px; background: var(--card); transition: transform .25s cubic-bezier(.2,.8,.2,1); }
+.ex.dragging .ex-main { transition: none; }
+.ex.dragging { -webkit-user-select: none; user-select: none; }
+.ex.open .ex-main::after { content: ''; position: absolute; inset: 0; }   /* a tap anywhere on the row just closes it */
+.ex-del { position: absolute; top: 0; right: 0; bottom: 0; width: 88px; border: 0; background: var(--danger); color: #fff; font-size: 16px; font-weight: 600; }
+.ex-skipped { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 14px 12px 16px; border-top: .5px solid var(--sep); font-size: 13px; color: var(--muted); }
+.ex-skipped .chip { border: 0; display: inline-flex; align-items: center; gap: 3px; }
+.ex-skipped .chip .ico { width: 14px; height: 14px; }
 .ex-head { display: flex; align-items: flex-start; gap: 8px; }
 .ex-title { flex: 1; min-width: 0; padding-top: 4px; line-height: 1.3; }
 .ex-title b { font-size: 17px; font-weight: 650; letter-spacing: -.2px; }
@@ -513,6 +524,10 @@ function loggedBps(dateStr) {
   return [...ids].map(id => Store.bp.get(id)).filter(Boolean).sort(byOrder);
 }
 
+/** Sets shown for an exercise on a date: the user's +/− adjustment for that day, else the default; never fewer than are logged. */
+const setsKey = (date, exId) => `sets.${date}_${exId}`;
+const setCount = (ex, date, maxN = 0) => Math.max(1, maxN, cfg(setsKey(date, ex.id), ex.sets || 1));
+
 /** A day's workout is done when the user tapped Done, or every exercise of each logged body part has its default sets. */
 function isDayDone(dateStr) {
   const logged = loggedBps(dateStr);
@@ -520,7 +535,7 @@ function isDayDone(dateStr) {
   if (cfg(`done.${dateStr}`, false)) return true;
   const filled = new Map();
   for (const r of Store.set.values()) if (r.date === dateStr && r.reps != null) filled.set(r.exId, (filled.get(r.exId) || 0) + 1);
-  return logged.every(b => exsOf(b.id).every(e => (filled.get(e.id) || 0) >= (e.sets || 1)));
+  return logged.every(b => exsOf(b.id).every(e => isSkipped(dateStr, e.id) || (filled.get(e.id) || 0) >= setCount(e, dateStr)));
 }
 
 function recentWorkouts(limit) {
@@ -531,6 +546,10 @@ function recentWorkouts(limit) {
   }
   return [...byDate.values()].sort((a, b) => (a.date < b.date ? 1 : -1)).slice(0, limit);
 }
+
+/** Exercises removed from one day's workout (swipe → Delete); they stay assigned to the body part. */
+const skipKey = (date, exId) => `skip.${date}_${exId}`;
+const isSkipped = (date, exId) => cfg(skipKey(date, exId), false);
 
 /** Active exercises for a body part, plus any deleted ones that have sets on this date. */
 function woExercises(bpId, date, idx) {
@@ -554,6 +573,7 @@ const ICON = {
   more: I(DOT(5.5) + DOT(12) + DOT(18.5)),
   chev: I('<path d="M9.5 6l6 6-6 6"/>', 'ico chev'),
   x: I('<path d="M7 7l10 10M17 7L7 17"/>', 'ico sm'),
+  minus: I('<path d="M5 12h14"/>', 'ico sm'),
   check: I('<path d="M5 12.5l4.5 4.5L19 7.5"/>'),
 };
 
@@ -634,7 +654,6 @@ function toast(msg) {
    ========================================================= */
 let view = { name: 'home' };
 let histReturn = null;               // view to return to when the history button is toggled off
-const extraSets = {};                // `${date}_${exId}` -> set count added during this session
 const TITLES = { home: 'Workout', past: 'Workout', pick: 'Workout', workout: 'Workout', exercises: 'Exercises', schedule: 'Schedule', history: 'History' };
 const TABS = [['exercises', 'Exercises', ICON.list], ['schedule', 'Schedule', ICON.cal], ['home', 'Workout', ICON.dumbbell]];
 const tabOf = n => ({ home: 'home', past: 'home', pick: 'home', workout: 'home', exercises: 'exercises', schedule: 'schedule' }[n] || '');
@@ -732,12 +751,14 @@ Views.workout = v => {
   const list = v.bpIds.map(id => Store.bp.get(id)).filter(Boolean);
   const multi = list.length > 1;
   const secs = list.map(bp => {
-    const exs = woExercises(bp.id, v.date, idx);
-    const body = exs.length ? exs.map(ex => exBlock(ex, v.date, idx, u)).join('')
+    const all = woExercises(bp.id, v.date, idx), skipped = all.filter(ex => isSkipped(v.date, ex.id));
+    const body = all.length ? all.filter(ex => !skipped.includes(ex)).map(ex => exBlock(ex, v.date, idx, u)).join('')
       : `<div class="empty-sm">No exercises defined for ${esc(bp.name)} yet. <button class="btn link" data-act="tab" data-v="exercises">Add some</button></div>`;
+    const restore = skipped.length ? `<div class="ex-skipped">Removed today:${skipped.map(ex =>
+      `<button class="chip" data-act="ex-unskip" data-ex="${ex.id}" title="Put back in this workout">${ICON.plus}${esc(ex.name)}</button>`).join('')}</div>` : '';
     return `<section class="card wo-sec" data-bpsec="${bp.id}">
       ${multi ? `<div class="sec-title"><span>${esc(bp.name)}</span><button class="icon-btn sm" data-act="wo-rm-bp" data-bp="${bp.id}" aria-label="Remove ${esc(bp.name)}">${ICON.x}</button></div>` : ''}
-      ${body}</section>`;
+      ${body}${restore}</section>`;
   }).join('');
   return `<div class="page-head"><div class="kicker">${esc(fmtDateLong(v.date))}</div><h1>${names(list)}</h1>
       <div class="legend">Enter each set as <b class="c-reps">reps</b> @ <b class="c-wt">${u}</b>. Saved automatically.</div></div>
@@ -752,7 +773,7 @@ function exBlock(ex, date, idx, u) {
   for (const d of byDate.keys()) if (d < date && (!lastDate || d > lastDate)) lastDate = d;
   const last = lastDate ? byDate.get(lastDate) : null;
   const maxN = cur.reduce((m, r) => Math.max(m, r.set), 0);
-  const count = Math.max(ex.sets || 1, maxN, extraSets[`${date}_${ex.id}`] || 0);
+  const count = setCount(ex, date, maxN);
   let cells = '';
   for (let n = 1; n <= count; n++) {
     const r = cur.find(x => x.set === n), p = last?.[n - 1];
@@ -771,9 +792,12 @@ function exBlock(ex, date, idx, u) {
     ? `<button type="button" class="last" data-act="hist" data-ex="${ex.id}" title="View history">${esc(fmtDate(lastDate))}: ${esc(fmtSets(last, u))}</button>`
     : `<span class="last none">first time</span>`;
   return `<div class="ex">
-    <div class="ex-head"><div class="ex-title"><b>${esc(ex.name)}</b> <span class="dash">–</span> ${lastTxt}</div>
-      <button class="icon-btn sm" data-act="add-set" data-ex="${ex.id}" data-count="${count}" aria-label="Add a set" title="Add a set">${ICON.plus}</button></div>
-    <div class="sets">${cells}</div></div>`;
+    <button class="ex-del" data-act="ex-skip" data-ex="${ex.id}" tabindex="-1">Delete</button>
+    <div class="ex-main"><div class="ex-head"><div class="ex-title"><b>${esc(ex.name)}</b> <span class="dash">–</span> ${lastTxt}</div>
+      <div class="set-btns">
+        <button class="icon-btn sm" data-act="rm-set" data-ex="${ex.id}" data-count="${count}" aria-label="Remove last set" title="Remove last set"${count <= 1 ? ' disabled' : ''}>${ICON.minus}</button>
+        <button class="icon-btn sm" data-act="add-set" data-ex="${ex.id}" data-count="${count}" aria-label="Add a set" title="Add a set">${ICON.plus}</button></div></div>
+    <div class="sets">${cells}</div></div></div>`;
 }
 
 Views.exercises = () => {
@@ -992,6 +1016,7 @@ function renderChrome() {
 }
 
 function render() {
+  swipeOpen = null;
   renderChrome();
   $('#main').innerHTML = (Views[view.name] || Views.home)(view);
   Mount[view.name]?.(view);
@@ -1195,11 +1220,29 @@ const A = {
     go(logged.length ? { name: 'workout', date, bpIds: logged, from: 'past' } : { name: 'pick', date, from: 'past' });
   },
   'open-wo': el => go({ name: 'workout', date: el.dataset.date, bpIds: el.dataset.bps.split(',').filter(id => Store.bp.has(id)) }),
+  'ex-skip': async el => {
+    const ex = el.dataset.ex, date = view.date, name = Store.ex.get(ex)?.name;
+    const recs = [...Store.set.keys()].filter(k => k.startsWith(`${date}_${ex}_`));
+    if (recs.length && !(await confirmSheet(`Remove ${name} from this workout? ${recs.length} logged set${recs.length === 1 ? '' : 's'} will be deleted.`, 'Remove', true))) return closeSwipe();
+    recs.forEach(k => Store.del('set', k));
+    setCfg(skipKey(date, ex), true);
+    render();
+  },
+  'ex-unskip': el => { Store.del('cfg', skipKey(view.date, el.dataset.ex)); render(); },
   'add-set': el => {
     const ex = el.dataset.ex, n = +el.dataset.count + 1;
-    extraSets[`${view.date}_${ex}`] = n;
+    setCfg(setsKey(view.date, ex), n);
     render();
     $(`.set input.reps[data-ex="${ex}"][data-n="${n}"]`)?.focus();
+  },
+  'rm-set': async el => {
+    const ex = el.dataset.ex, n = +el.dataset.count, date = view.date;
+    if (n <= 1) return;
+    const key = `${date}_${ex}_${n}`, rec = Store.set.get(key);
+    if (rec && !(await confirmSheet(`Remove set ${n} (${fmtSet(rec, unit())})? Its logged entry will be deleted.`, 'Remove', true))) return;
+    if (rec) Store.del('set', key);
+    setCfg(setsKey(date, ex), n - 1);
+    render();
   },
   'wo-add-bp': async () => {
     const avail = bps().filter(b => !view.bpIds.includes(b.id));
@@ -1310,6 +1353,70 @@ function saveSetInput(inp) {
 }
 
 /* =========================================================
+   Swipe an exercise left to reveal Delete
+   ========================================================= */
+const SWIPE_W = 88;
+let swipeOpen = null;                  // the .ex row whose Delete button is showing
+
+function slide(row, x) { $('.ex-main', row).style.transform = x ? `translateX(${x}px)` : ''; }
+function closeSwipe() {
+  const row = swipeOpen;
+  if (!row) return;
+  swipeOpen = null;
+  slide(row, 0);
+  // Keep the tap shield until the slide finishes, so the closing tap can't also focus a field.
+  setTimeout(() => { if (swipeOpen !== row) row.classList.remove('open'); }, 300);
+}
+
+function initSwipe(main) {
+  let drag = null;                     // { row, id, x0, y0, base, dx, horiz }
+  // Any touch outside the open row's Delete button closes it (a touch on the row itself may also drag it shut).
+  document.addEventListener('pointerdown', e => {
+    if (swipeOpen && !e.target.closest('.ex-del') && e.target.closest('.ex') !== swipeOpen) closeSwipe();
+  }, true);
+  main.addEventListener('pointerdown', e => {
+    const row = e.target.closest('.ex');
+    if (!row || e.target.closest('.ex-del') || (e.pointerType === 'mouse' && e.button !== 0)) return;
+    drag = { row, id: e.pointerId, x0: e.clientX, y0: e.clientY, base: row === swipeOpen ? -SWIPE_W : 0, dx: 0, horiz: null };
+  });
+  main.addEventListener('pointermove', e => {
+    if (!drag || e.pointerId !== drag.id) return;
+    const dx = e.clientX - drag.x0, dy = e.clientY - drag.y0;
+    if (drag.horiz === null) {
+      if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+      drag.horiz = Math.abs(dx) > Math.abs(dy);
+      if (!drag.horiz) { drag = null; return; }   // vertical: let the page scroll
+      drag.row.setPointerCapture(e.pointerId);
+      drag.row.classList.add('dragging');
+      document.activeElement?.blur?.();
+    }
+    drag.dx = dx;
+    slide(drag.row, Math.min(0, Math.max(-SWIPE_W * 1.4, drag.base + dx)));
+  });
+  const end = e => {
+    if (!drag || e.pointerId !== drag.id) return;
+    const { row, base, dx, horiz } = drag;
+    drag = null;
+    row.classList.remove('dragging');
+    if (!horiz) { if (row === swipeOpen && e.type === 'pointerup') closeSwipe(); return; }   // tap on an open row
+    if (e.type === 'pointerup' && base + dx < -SWIPE_W / 2) {
+      if (swipeOpen !== row) closeSwipe();
+      swipeOpen = row;
+      row.classList.add('open');
+      slide(row, -SWIPE_W);
+    } else if (row === swipeOpen) closeSwipe();
+    else slide(row, 0);
+  };
+  main.addEventListener('pointerup', end);
+  main.addEventListener('pointercancel', end);
+  // A drag that ends over a button or field must not also count as a tap on it.
+  main.addEventListener('click', e => {
+    const row = e.target.closest('.ex');
+    if (row && row.classList.contains('open') && !e.target.closest('.ex-del')) { e.preventDefault(); e.stopPropagation(); }
+  }, true);
+}
+
+/* =========================================================
    Boot
    ========================================================= */
 function init() {
@@ -1324,6 +1431,7 @@ function init() {
     A[el.dataset.act]?.(el, e);
   });
   const main = $('#main');
+  initSwipe(main);
   main.addEventListener('input', e => { if (e.target.matches('.set input')) saveSetInput(e.target); });
   main.addEventListener('keydown', e => {
     if (e.key === 'Enter' && e.target.matches('.set input')) {

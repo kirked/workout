@@ -202,7 +202,8 @@ main {
 .ex.dragging .ex-main { transition: none; }
 .ex.dragging { -webkit-user-select: none; user-select: none; }
 .ex.open .ex-main::after { content: ''; position: absolute; inset: 0; }   /* a tap anywhere on the row just closes it */
-.ex-del { position: absolute; top: 0; right: 0; bottom: 0; width: 88px; border: 0; background: var(--danger); color: #fff; font-size: 16px; font-weight: 600; }
+.ex-del { position: absolute; top: 0; right: 0; bottom: 0; width: 88px; border: 0; background: var(--danger); color: #fff; font-size: 16px; font-weight: 600; visibility: hidden; }
+.ex.reveal .ex-del { visibility: visible; }   /* hidden at rest so it can't peek through sub-pixel row edges */
 .ex-skipped { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 14px 12px 16px; border-top: .5px solid var(--sep); font-size: 13px; color: var(--muted); }
 .ex-skipped .chip { border: 0; display: inline-flex; align-items: center; gap: 3px; }
 .ex-skipped .chip .ico { width: 14px; height: 14px; }
@@ -475,14 +476,22 @@ const setCfg = (k, v) => Store.put('cfg', k, v);
 const unit = () => cfg('unit', defaultUnit);
 
 /* =========================================================
-   Weights & display format  (N@W, sets joined by ", ")
+   Weights & display format  (N⋅W, sets joined by ", "; a run of identical sets is C⋅N⋅W)
    ========================================================= */
 const KG_PER_LB = 0.45359237;
 const conv = (w, from, to) => (w == null || from === to ? w : from === 'lb' ? w * KG_PER_LB : w / KG_PER_LB);
 const roundW = (w, u) => (u === 'kg' ? Math.round(w) : Math.round(w * 10) / 10);
 const fmtW = (w, u) => (w == null || !isFinite(w) ? '' : String(roundW(w, u)));
-const fmtSet = (r, u) => `${r.reps ?? '–'}@${r.weight == null ? '–' : fmtW(conv(r.weight, r.unit, u), u)}`;
-const fmtSets = (recs, u) => recs.map(r => fmtSet(r, u)).join(', ');
+const fmtSet = (r, u) => `${r.reps ?? '–'}⋅${r.weight == null ? '–' : fmtW(conv(r.weight, r.unit, u), u)}`;
+/** e.g. 10⋅100, 10⋅100, 10⋅110, 10⋅100 → "2⋅10⋅100, 10⋅110, 10⋅100" (only back-to-back repeats merge). */
+function fmtSets(recs, u) {
+  const runs = [];
+  for (const s of recs.map(r => fmtSet(r, u))) {
+    const last = runs[runs.length - 1];
+    if (last && last.s === s) last.n++; else runs.push({ s, n: 1 });
+  }
+  return runs.map(({ s, n }) => (n > 1 ? `${n}⋅${s}` : s)).join(', ');
+}
 
 /* =========================================================
    Queries
@@ -761,7 +770,7 @@ Views.workout = v => {
       ${body}${restore}</section>`;
   }).join('');
   return `<div class="page-head"><div class="kicker">${esc(fmtDateLong(v.date))}</div><h1>${names(list)}</h1>
-      <div class="legend">Enter each set as <b class="c-reps">reps</b> @ <b class="c-wt">${u}</b>. Saved automatically.</div></div>
+      <div class="legend">Enter each set as <b class="c-reps">reps</b> ⋅ <b class="c-wt">${u}</b>. Saved automatically.</div></div>
     ${secs}
     <div class="wo-actions"><button class="btn" data-act="wo-add-bp">${ICON.plus} Body part</button><button class="btn primary" data-act="done">Done</button></div>`;
 };
@@ -784,7 +793,7 @@ function exBlock(ex, date, idx, u) {
     const lbl = `${esc(ex.name)} set ${n}`;
     cells += `<div class="set${r ? ' filled' : ''}">
       <input class="reps" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="3" enterkeyhint="next" aria-label="${lbl} reps"
-        data-ex="${ex.id}" data-n="${n}" data-f="reps" value="${rv}" placeholder="${esc(rp)}"><span class="at">@</span><input
+        data-ex="${ex.id}" data-n="${n}" data-f="reps" value="${rv}" placeholder="${esc(rp)}"><span class="at">⋅</span><input
         class="wt" type="text" inputmode="decimal" maxlength="6" enterkeyhint="next" aria-label="${lbl} weight"
         data-ex="${ex.id}" data-n="${n}" data-f="w" value="${wv}" placeholder="${esc(wp)}"></div>`;
   }
@@ -1358,7 +1367,12 @@ function saveSetInput(inp) {
 const SWIPE_W = 88;
 let swipeOpen = null;                  // the .ex row whose Delete button is showing
 
-function slide(row, x) { $('.ex-main', row).style.transform = x ? `translateX(${x}px)` : ''; }
+function slide(row, x) {
+  $('.ex-main', row).style.transform = x ? `translateX(${x}px)` : '';
+  clearTimeout(row._hide);
+  if (x) row.classList.add('reveal');
+  else row._hide = setTimeout(() => row.classList.remove('reveal'), 300);   // after the slide-back animation
+}
 function closeSwipe() {
   const row = swipeOpen;
   if (!row) return;

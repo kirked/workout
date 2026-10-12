@@ -49,6 +49,7 @@
   --reps: #ff9500;
   --danger: #ff3b30;
   --set-dot: #3a3a3c;
+  --note: #a00000;
   --bar-bg: rgba(242, 242, 247, .85);
   --shadow: 0 1px 2px rgba(0,0,0,.04), 0 4px 16px rgba(0,0,0,.04);
   --radius: 14px;
@@ -68,6 +69,7 @@
     --reps: #ff9f0a;
     --danger: #ff453a;
     --set-dot: #d1d1d6;
+    --note: #ff6b6b;
     --bar-bg: rgba(18, 18, 20, .82);
     --shadow: none;
   }
@@ -202,8 +204,24 @@ main {
 .ex.dragging .ex-main { transition: none; }
 .ex.dragging { -webkit-user-select: none; user-select: none; }
 .ex.open .ex-main::after { content: ''; position: absolute; inset: 0; }   /* a tap anywhere on the row just closes it */
-.ex-del { position: absolute; top: 0; right: 0; bottom: 0; width: 88px; border: 0; background: var(--danger); color: #fff; font-size: 16px; font-weight: 600; visibility: hidden; }
-.ex.reveal .ex-del { visibility: visible; }   /* hidden at rest so it can't peek through sub-pixel row edges */
+/* Panel revealed by the swipe: a row of action buttons, then the day's note for this exercise. */
+.ex-actions {
+  position: absolute; top: 0; right: 0; bottom: 0; width: calc(100% - 56px); max-width: 360px;
+  display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; background: var(--bg); visibility: hidden;
+}
+.ex.reveal .ex-actions { visibility: visible; }   /* hidden at rest so it can't peek through sub-pixel row edges */
+.ex-btns { display: flex; justify-content: flex-end; gap: 8px; }
+.ex-btns button { border: 0; border-radius: 9px; padding: 7px 16px; font-size: 15px; font-weight: 600; }
+.ex-btns .del { background: var(--danger); color: #fff; }
+.ex-note {
+  flex: 1; min-height: 40px; width: 100%; resize: none; padding: 6px 10px; border-radius: 10px;
+  border: 1.5px solid transparent; background: var(--card); color: var(--text); font: inherit; font-size: 16px; line-height: 1.3; outline: none;
+}
+.ex-note:focus { border-color: var(--accent); }
+.ex-note::placeholder { color: var(--muted); opacity: .7; }
+.note-mark { color: var(--note); font-weight: 700; font-size: 15px; margin-left: 1px; cursor: pointer; }
+.note-mark[hidden] { display: none; }
+.hnote { color: var(--note); font-size: 13px; margin-top: 2px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .ex-skipped { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 14px 12px 16px; border-top: .5px solid var(--sep); font-size: 13px; color: var(--muted); }
 .ex-skipped .chip { border: 0; display: inline-flex; align-items: center; gap: 3px; }
 .ex-skipped .chip .ico { width: 14px; height: 14px; }
@@ -385,6 +403,14 @@ button.last { text-decoration: underline dotted rgba(142,142,147,.6); text-under
   transition: opacity .2s, transform .2s;
 }
 #toast.show { opacity: 1; transform: translate(-50%, 0); }
+#update-bar {
+  position: fixed; left: 50%; bottom: calc(76px + env(safe-area-inset-bottom)); z-index: 150;
+  display: none; align-items: center; gap: 12px; width: max-content; max-width: calc(100vw - 32px);
+  padding: 6px 6px 6px 16px; border-radius: 24px; transform: translateX(-50%);
+  background: rgba(30,30,32,.94); color: #fff; font-size: 15px; font-weight: 500; box-shadow: 0 6px 20px rgba(0,0,0,.25);
+}
+#update-bar.show { display: flex; }
+#update-bar button { border: 0; border-radius: 18px; padding: 8px 16px; background: var(--accent); color: #fff; font-weight: 600; }
 </style>
 </head>
 <body>
@@ -400,6 +426,7 @@ button.last { text-decoration: underline dotted rgba(142,142,147,.6); text-under
 <nav id="tabbar"><div class="tabs" id="tabs"></div></nav>
 <div id="modal-root"></div>
 <div id="toast" role="status" aria-live="polite"></div>
+<div id="update-bar" role="status"><span>New version available</span><button type="button" onclick="location.reload()">Reload</button></div>
 
 <script>
 'use strict';
@@ -441,7 +468,7 @@ function fmtDateLong(s) {
    ========================================================= */
 const PFX = 'wt.';
 const Store = {
-  bp: new Map(), ex: new Map(), sch: new Map(), set: new Map(), cfg: new Map(),
+  bp: new Map(), ex: new Map(), sch: new Map(), set: new Map(), note: new Map(), cfg: new Map(),
   load() {
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
@@ -466,7 +493,7 @@ const Store = {
     const keys = [];
     for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k && k.startsWith(PFX)) keys.push(k); }
     keys.forEach(k => localStorage.removeItem(k));
-    ['bp', 'ex', 'sch', 'set', 'cfg'].forEach(t => this[t].clear());
+    ['bp', 'ex', 'sch', 'set', 'note', 'cfg'].forEach(t => this[t].clear());
   },
 };
 
@@ -476,21 +503,23 @@ const setCfg = (k, v) => Store.put('cfg', k, v);
 const unit = () => cfg('unit', defaultUnit);
 
 /* =========================================================
-   Weights & display format  (N⋅W, sets joined by ", "; a run of identical sets is C⋅N⋅W)
+   Weights & display format  (N ⋅ W, sets joined by ", "; a run of identical sets is C⨉ N ⋅ W)
    ========================================================= */
 const KG_PER_LB = 0.45359237;
 const conv = (w, from, to) => (w == null || from === to ? w : from === 'lb' ? w * KG_PER_LB : w / KG_PER_LB);
 const roundW = (w, u) => (u === 'kg' ? Math.round(w) : Math.round(w * 10) / 10);
 const fmtW = (w, u) => (w == null || !isFinite(w) ? '' : String(roundW(w, u)));
-const fmtSet = (r, u) => `${r.reps ?? '–'}⋅${r.weight == null ? '–' : fmtW(conv(r.weight, r.unit, u), u)}`;
-/** e.g. 10⋅100, 10⋅100, 10⋅110, 10⋅100 → "2⋅10⋅100, 10⋅110, 10⋅100" (only back-to-back repeats merge). */
+// Narrow no-break spaces (U+202F) keep each set on one line; lines only break after the commas.
+const NB = '\u202f';
+const fmtSet = (r, u) => `${r.reps ?? '–'}${NB}⋅${NB}${r.weight == null ? '–' : fmtW(conv(r.weight, r.unit, u), u)}`;
+/** e.g. 10⋅100, 10⋅100, 10⋅110, 10⋅100 → "2⨉ 10 ⋅ 100, 10 ⋅ 110, 10 ⋅ 100" (only back-to-back repeats merge). */
 function fmtSets(recs, u) {
   const runs = [];
   for (const s of recs.map(r => fmtSet(r, u))) {
     const last = runs[runs.length - 1];
     if (last && last.s === s) last.n++; else runs.push({ s, n: 1 });
   }
-  return runs.map(({ s, n }) => (n > 1 ? `${n}⋅${s}` : s)).join(', ');
+  return runs.map(({ s, n }) => (n > 1 ? `${n}⨉${NB}${s}` : s)).join(', ');
 }
 
 /* =========================================================
@@ -559,6 +588,16 @@ function recentWorkouts(limit) {
 /** Exercises removed from one day's workout (swipe → Delete); they stay assigned to the body part. */
 const skipKey = (date, exId) => `skip.${date}_${exId}`;
 const isSkipped = (date, exId) => cfg(skipKey(date, exId), false);
+
+/** A short note on one exercise for one day: its own record, keyed `${date}_${exId}`. */
+const noteKey = (date, exId) => `${date}_${exId}`;
+const noteOf = (date, exId) => Store.note.get(noteKey(date, exId))?.text || '';
+function saveNote(date, exId, text) {
+  const key = noteKey(date, exId);
+  text = text.trim();
+  if (!text) { if (Store.note.has(key)) Store.del('note', key); return; }
+  Store.put('note', key, { date, exId, bpId: Store.ex.get(exId)?.bpId, text, ts: Date.now() });
+}
 
 /** Active exercises for a body part, plus any deleted ones that have sets on this date. */
 function woExercises(bpId, date, idx) {
@@ -798,11 +837,16 @@ function exBlock(ex, date, idx, u) {
         data-ex="${ex.id}" data-n="${n}" data-f="w" value="${wv}" placeholder="${esc(wp)}"></div>`;
   }
   const lastTxt = last
-    ? `<button type="button" class="last" data-act="hist" data-ex="${ex.id}" title="View history">${esc(fmtDate(lastDate))}: ${esc(fmtSets(last, u))}</button>`
+    ? `<button type="button" class="last" data-act="hist" data-ex="${ex.id}" title="View history">${esc(fmtDate(lastDate))}: ${esc(fmtSets(last, u))}${noteOf(lastDate, ex.id) ? '<sup class="note-mark">*</sup>' : ''}</button>`
     : `<span class="last none">first time</span>`;
-  return `<div class="ex">
-    <button class="ex-del" data-act="ex-skip" data-ex="${ex.id}" tabindex="-1">Delete</button>
-    <div class="ex-main"><div class="ex-head"><div class="ex-title"><b>${esc(ex.name)}</b> <span class="dash">–</span> ${lastTxt}</div>
+  const note = noteOf(date, ex.id);
+  return `<div class="ex" data-ex="${ex.id}">
+    <div class="ex-actions">
+      <div class="ex-btns"><button class="del" data-act="ex-skip" data-ex="${ex.id}" tabindex="-1">Delete</button></div>
+      <textarea class="ex-note" data-ex="${ex.id}" rows="2" maxlength="300" tabindex="-1" placeholder="Note for ${esc(ex.name)} today"
+        aria-label="Note for ${esc(ex.name)}">${esc(note)}</textarea>
+    </div>
+    <div class="ex-main"><div class="ex-head"><div class="ex-title"><b>${esc(ex.name)}</b><sup class="note-mark" data-act="note-open" title="Show note"${note ? '' : ' hidden'}>*</sup> <span class="dash">–</span> ${lastTxt}</div>
       <div class="set-btns">
         <button class="icon-btn sm" data-act="rm-set" data-ex="${ex.id}" data-count="${count}" aria-label="Remove last set" title="Remove last set"${count <= 1 ? ' disabled' : ''}>${ICON.minus}</button>
         <button class="icon-btn sm" data-act="add-set" data-ex="${ex.id}" data-count="${count}" aria-label="Add a set" title="Add a set">${ICON.plus}</button></div></div>
@@ -883,7 +927,8 @@ Views.history = v => {
     </div>
     <h3 class="section-h">Sessions</h3>
     <div class="card list">${dates.length ? dates.slice().reverse().map(d =>
-      `<div class="hrow"><span class="hdate">${esc(fmtDate(d))}</span><span class="hsets">${esc(fmtSets(byDate.get(d), u))}</span></div>`).join('')
+      `<div class="hrow"><span class="hdate">${esc(fmtDate(d))}</span><span class="hsets">${esc(fmtSets(byDate.get(d), u))}${
+        noteOf(d, v.exId) ? `<div class="hnote">${esc(noteOf(d, v.exId))}</div>` : ''}</span></div>`).join('')
       : '<div class="empty-sm">No sets logged for this exercise yet.</div>'}</div>`;
 };
 
@@ -1058,7 +1103,7 @@ function moveItem(list, id, dir, type) {
   list.forEach(x => Store.put(type, x.id, x));
 }
 
-const hasSets = exId => [...Store.set.values()].some(r => r.exId === exId);
+const hasSets = exId => [...Store.set.values(), ...Store.note.values()].some(r => r.exId === exId);   // sets or notes
 function removeExercise(ex) {
   if (hasSets(ex.id)) { ex.deleted = true; Store.put('ex', ex.id, ex); }   // keep history for charts/export
   else Store.del('ex', ex.id);
@@ -1142,6 +1187,7 @@ function buildCSV(u) {
   let maxSess = 0, maxSets = 0;
   const data = exs.map(ex => {
     const m = idx.get(ex.id) || new Map();
+    for (const n of Store.note.values()) if (n.exId === ex.id && !m.has(n.date)) m.set(n.date, []);   // note-only days
     const dates = [...m.keys()].sort();
     maxSess = Math.max(maxSess, dates.length);
     dates.forEach(d => { maxSets = Math.max(maxSets, m.get(d).length); });
@@ -1149,14 +1195,14 @@ function buildCSV(u) {
   });
   const header = ['Exercise', 'Body Part'];
   for (let s = 1; s <= maxSess; s++) {
-    header.push(`#${s} Date`, `#${s} Set Count`);
+    header.push(`#${s} Date`, `#${s} Set Count`, `#${s} Note`);
     for (let k = 1; k <= maxSets; k++) header.push(`#${s} Set ${k} Reps`, `#${s} Set ${k} Weight (${u})`);
   }
   const rows = data.map(({ ex, bp, dates, m }) => {
     const row = [ex.name, bp?.name ?? ''];
     dates.forEach(d => {
       const recs = m.get(d);
-      row.push(d, recs.length);
+      row.push(d, recs.length, noteOf(d, ex.id));
       for (let k = 0; k < maxSets; k++) {
         const r = recs[k];
         row.push(r?.reps ?? '', r && r.weight != null ? (r.unit === u ? r.weight : roundW(conv(r.weight, r.unit, u), u)) : '');
@@ -1232,10 +1278,18 @@ const A = {
   'ex-skip': async el => {
     const ex = el.dataset.ex, date = view.date, name = Store.ex.get(ex)?.name;
     const recs = [...Store.set.keys()].filter(k => k.startsWith(`${date}_${ex}_`));
-    if (recs.length && !(await confirmSheet(`Remove ${name} from this workout? ${recs.length} logged set${recs.length === 1 ? '' : 's'} will be deleted.`, 'Remove', true))) return closeSwipe();
+    const lost = [recs.length && `${recs.length} logged set${recs.length === 1 ? '' : 's'}`, noteOf(date, ex) && 'its note'].filter(Boolean);
+    const what = lost.join(' and ');
+    if (lost.length && !(await confirmSheet(`Remove ${name} from this workout? ${what[0].toUpperCase() + what.slice(1)} will be deleted.`, 'Remove', true))) return closeSwipe();
     recs.forEach(k => Store.del('set', k));
+    saveNote(date, ex, '');
     setCfg(skipKey(date, ex), true);
     render();
+  },
+  'note-open': el => {
+    const row = el.closest('.ex');
+    openSwipe(row);
+    $('.ex-note', row).focus({ preventScroll: true });
   },
   'ex-unskip': el => { Store.del('cfg', skipKey(view.date, el.dataset.ex)); render(); },
   'add-set': el => {
@@ -1364,8 +1418,8 @@ function saveSetInput(inp) {
 /* =========================================================
    Swipe an exercise left to reveal Delete
    ========================================================= */
-const SWIPE_W = 88;
-let swipeOpen = null;                  // the .ex row whose Delete button is showing
+let swipeOpen = null;                  // the .ex row whose action panel is showing
+const panelW = row => $('.ex-actions', row).offsetWidth;
 
 function slide(row, x) {
   $('.ex-main', row).style.transform = x ? `translateX(${x}px)` : '';
@@ -1373,25 +1427,35 @@ function slide(row, x) {
   if (x) row.classList.add('reveal');
   else row._hide = setTimeout(() => row.classList.remove('reveal'), 300);   // after the slide-back animation
 }
+function openSwipe(row) {
+  if (swipeOpen !== row) closeSwipe();
+  swipeOpen = row;
+  row.classList.add('open');
+  $$('.ex-actions [tabindex]', row).forEach(el => el.removeAttribute('tabindex'));
+  slide(row, -panelW(row));
+}
 function closeSwipe() {
   const row = swipeOpen;
   if (!row) return;
   swipeOpen = null;
+  if (row.contains(document.activeElement)) document.activeElement.blur();
+  $$('.ex-actions button, .ex-actions textarea', row).forEach(el => el.setAttribute('tabindex', '-1'));
   slide(row, 0);
   // Keep the tap shield until the slide finishes, so the closing tap can't also focus a field.
   setTimeout(() => { if (swipeOpen !== row) row.classList.remove('open'); }, 300);
 }
 
 function initSwipe(main) {
-  let drag = null;                     // { row, id, x0, y0, base, dx, horiz }
-  // Any touch outside the open row's Delete button closes it (a touch on the row itself may also drag it shut).
+  let drag = null;                     // { row, id, x0, y0, base, w, dx, horiz }
+  // Any touch outside the open row's action panel closes it — including the sliver of the row still showing.
   document.addEventListener('pointerdown', e => {
-    if (swipeOpen && !e.target.closest('.ex-del') && e.target.closest('.ex') !== swipeOpen) closeSwipe();
+    if (swipeOpen && !$('.ex-actions', swipeOpen).contains(e.target)) closeSwipe();
   }, true);
   main.addEventListener('pointerdown', e => {
     const row = e.target.closest('.ex');
-    if (!row || e.target.closest('.ex-del') || (e.pointerType === 'mouse' && e.button !== 0)) return;
-    drag = { row, id: e.pointerId, x0: e.clientX, y0: e.clientY, base: row === swipeOpen ? -SWIPE_W : 0, dx: 0, horiz: null };
+    if (!row || (e.pointerType === 'mouse' && e.button !== 0)) return;
+    const w = panelW(row);
+    drag = { row, id: e.pointerId, x0: e.clientX, y0: e.clientY, base: row === swipeOpen ? -w : 0, w, dx: 0, horiz: null };
   });
   main.addEventListener('pointermove', e => {
     if (!drag || e.pointerId !== drag.id) return;
@@ -1405,28 +1469,26 @@ function initSwipe(main) {
       document.activeElement?.blur?.();
     }
     drag.dx = dx;
-    slide(drag.row, Math.min(0, Math.max(-SWIPE_W * 1.4, drag.base + dx)));
+    slide(drag.row, Math.min(0, Math.max(-drag.w - 30, drag.base + dx)));
   });
   const end = e => {
     if (!drag || e.pointerId !== drag.id) return;
     const { row, base, dx, horiz } = drag;
     drag = null;
     row.classList.remove('dragging');
-    if (!horiz) { if (row === swipeOpen && e.type === 'pointerup') closeSwipe(); return; }   // tap on an open row
-    if (e.type === 'pointerup' && base + dx < -SWIPE_W / 2) {
-      if (swipeOpen !== row) closeSwipe();
-      swipeOpen = row;
-      row.classList.add('open');
-      slide(row, -SWIPE_W);
-    } else if (row === swipeOpen) closeSwipe();
+    if (!horiz) return;
+    // A 50px flick is enough either way: left opens the panel, right closes it.
+    const open = e.type === 'pointerup' && (base === 0 ? dx < -50 : dx < 50);
+    if (open) openSwipe(row);
+    else if (row === swipeOpen) closeSwipe();
     else slide(row, 0);
   };
   main.addEventListener('pointerup', end);
   main.addEventListener('pointercancel', end);
-  // A drag that ends over a button or field must not also count as a tap on it.
+  // While a row is open (or closing), taps on the row itself only close it; the panel works normally.
   main.addEventListener('click', e => {
     const row = e.target.closest('.ex');
-    if (row && row.classList.contains('open') && !e.target.closest('.ex-del')) { e.preventDefault(); e.stopPropagation(); }
+    if (row && row.classList.contains('open') && !e.target.closest('.ex-actions')) { e.preventDefault(); e.stopPropagation(); }
   }, true);
 }
 
@@ -1446,7 +1508,13 @@ function init() {
   });
   const main = $('#main');
   initSwipe(main);
-  main.addEventListener('input', e => { if (e.target.matches('.set input')) saveSetInput(e.target); });
+  main.addEventListener('input', e => {
+    if (e.target.matches('.set input')) saveSetInput(e.target);
+    if (e.target.matches('.ex-note')) {
+      saveNote(view.date, e.target.dataset.ex, e.target.value);
+      $('.ex-main .note-mark', e.target.closest('.ex')).hidden = !e.target.value.trim();
+    }
+  });
   main.addEventListener('keydown', e => {
     if (e.key === 'Enter' && e.target.matches('.set input')) {
       e.preventDefault();
@@ -1478,7 +1546,20 @@ function init() {
   navigator.storage?.persist?.().catch(() => {});
   // Offline support (sw.js sits next to this file); service workers only run over http(s).
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
-    navigator.serviceWorker.register('sw.js').catch(() => {});
+    const sw = navigator.serviceWorker;
+    sw.register('sw.js').catch(() => {});
+    // Ask the service worker for a newer version on launch and whenever the app returns to the foreground
+    // (iOS often resumes a home-screen app without reloading it). Sets are saved as typed, so reloading is safe.
+    sw.addEventListener('message', e => { if (e.data?.type === 'update-ready') $('#update-bar').classList.add('show'); });
+    sw.startMessages();
+    let lastCheck = 0;
+    const check = () => {
+      if (Date.now() - lastCheck < 30e3) return;
+      lastCheck = Date.now();
+      sw.controller?.postMessage({ type: 'check' });
+    };
+    check();
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) check(); });
   }
   render();
 }

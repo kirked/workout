@@ -1,13 +1,30 @@
 /* Service worker: keeps a copy of the app on the device so it opens with no internet.
-   Strategy: serve the cached page instantly, then refresh the cache in the background,
-   so a new version published to the site is picked up on the following launch. */
+   Strategy: serve the cached page instantly, then refresh the cache in the background.
+   When the refresh finds a new version, a flag is stored; the page asks ("check") on launch
+   and when brought back to the foreground, and offers a one-tap reload when the flag is set. */
 'use strict';
 
 const CACHE = 'workout-v1';
 const PAGE = new URL('./index.html', self.registration.scope).href;
+const FLAG = new URL('./__update-ready', self.registration.scope).href;   // cache entry, not a real file
+
+/** Fetch the latest page into the cache; flag it if it differs from the copy we had. */
+async function refresh() {
+  const cache = await caches.open(CACHE);
+  const res = await fetch(PAGE, { cache: 'no-cache' }).catch(() => null);
+  if (!res || !res.ok) return;
+  const old = await cache.match(PAGE);
+  const [fresh, prev] = await Promise.all([res.clone().text(), old ? old.text() : null]);
+  await cache.put(PAGE, res);
+  if (prev !== null && fresh !== prev) await cache.put(FLAG, new Response('1'));
+}
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(CACHE).then(c => c.add(new Request(PAGE, { cache: 'reload' }))).then(() => self.skipWaiting()));
+  e.waitUntil((async () => {
+    await refresh();
+    if (!(await caches.match(PAGE))) throw new Error('could not cache the app');
+    await self.skipWaiting();
+  })());
 });
 
 self.addEventListener('activate', e => {
@@ -26,10 +43,22 @@ self.addEventListener('fetch', e => {
   if (!isPage) return;
   e.respondWith(caches.open(CACHE).then(async cache => {
     const cached = await cache.match(PAGE);
-    const refresh = fetch(PAGE, { cache: 'no-cache' })
-      .then(res => { if (res.ok) cache.put(PAGE, res.clone()); return res; })
-      .catch(() => null);
-    if (cached) { e.waitUntil(refresh); return cached; }
-    return (await refresh) || new Response('Offline — open the app once with a connection.', { status: 503, headers: { 'Content-Type': 'text/plain' } });
+    if (cached) {
+      // This load shows the newest cached copy, so any pending "update ready" is now satisfied.
+      e.waitUntil(cache.delete(FLAG).then(refresh));
+      return cached;
+    }
+    const res = await fetch(PAGE, { cache: 'no-cache' }).catch(() => null);
+    if (res && res.ok) { await cache.put(PAGE, res.clone()); return res; }
+    return new Response('Offline — open the app once with a connection.', { status: 503, headers: { 'Content-Type': 'text/plain' } });
   }));
+});
+
+// The page asks whether a newer version is waiting.
+self.addEventListener('message', e => {
+  if (e.data?.type !== 'check') return;
+  e.waitUntil((async () => {
+    await refresh();
+    if (await caches.match(FLAG)) e.source?.postMessage({ type: 'update-ready' });
+  })());
 });

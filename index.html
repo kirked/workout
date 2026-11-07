@@ -45,8 +45,8 @@
   --fill-strong: rgba(118, 118, 128, .2);
   --accent: #007aff;
   --accent-soft: rgba(0, 122, 255, .1);
-  --weight: #007aff;
-  --reps: #ff9500;
+  --weight: #ff9500;
+  --reps: #007aff;
   --danger: #ff3b30;
   --set-dot: #3a3a3c;
   --note: #a00000;
@@ -65,8 +65,8 @@
     --fill-strong: rgba(118, 118, 128, .36);
     --accent: #0a84ff;
     --accent-soft: rgba(10, 132, 255, .18);
-    --weight: #0a84ff;
-    --reps: #ff9f0a;
+    --weight: #ff9f0a;
+    --reps: #0a84ff;
     --danger: #ff453a;
     --set-dot: #d1d1d6;
     --note: #ff6b6b;
@@ -316,6 +316,11 @@ button.last { text-decoration: underline dotted rgba(142,142,147,.6); text-under
 .chart .pt-w { fill: var(--weight); stroke: var(--card); stroke-width: 1.5; }
 .chart .pt-r { fill: var(--reps); stroke: var(--card); stroke-width: 1.5; }
 .chart .hl { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; }
+.chart .sc { fill: var(--weight); stroke: var(--card); stroke-width: 1; }
+.chart .sc-sel { fill: none; stroke: var(--text); stroke-width: 2; }
+.seg.seg-sm { margin: 0 8px 10px; }
+.seg.seg-sm button { padding: 5px 6px; font-size: 13px; }
+.chart-legend i.s { width: 9px; height: 9px; border-radius: 50%; background: var(--weight); }
 .chart-empty { color: var(--muted); text-align: center; padding: 50px 10px; font-size: 14px; }
 .chart-legend { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 16px; padding: 8px 8px 0; font-size: 12px; color: var(--muted); }
 .chart-legend i { display: inline-block; width: 14px; height: 4px; border-radius: 2px; vertical-align: middle; margin-right: 5px; }
@@ -916,9 +921,11 @@ Views.history = v => {
       `<optgroup label="${esc(g.b.name)}">${g.exs.map(e => `<option value="${e.id}"${e.id === exId ? ' selected' : ''}>${esc(e.name)}</option>`).join('')}</optgroup>`).join('')}
     </select>${ICON.chev}</label>
     <section class="card chart-card">
+      <div class="seg seg-sm" role="tablist">${[['time', 'Over time'], ['scatter', 'Weight vs reps']].map(([k, l]) =>
+        `<button data-act="hist-chart" data-v="${k}" class="${chartMode() === k ? 'on' : ''}" role="tab">${l}</button>`).join('')}</div>
       <div class="chart-info" id="chart-info"></div>
       <div id="chart"></div>
-      <div class="chart-legend"><span><i class="w"></i>Top weight (${u}) · right</span><span><i class="r"></i>Avg reps · left</span><span>dots = individual sets</span></div>
+      <div class="chart-legend" id="chart-legend"></div>
     </section>
     <div class="stats">
       <div class="stat"><div class="stat-v">${dates.length}</div><div class="stat-l">sessions</div></div>
@@ -961,12 +968,25 @@ function niceScale(min, max, n, int) {
   }
   return { lo, step };
 }
+/** Like niceScale, but also picks the tick count (3–6) that hugs the data most tightly. */
+function tightScale(min, max, int) {
+  let best = null;
+  for (let n = 3; n <= 6; n++) {
+    const sc = niceScale(min, max, n, int);
+    if (!best || sc.step * n < best.step * best.n - 1e-9) best = { ...sc, n };
+  }
+  return best;
+}
 const num = v => String(+v.toFixed(1));
 
+const chartMode = () => cfg('histChart', 'time');
+
 function drawHistoryChart(exId) {
+  if (chartMode() === 'scatter') return drawScatterChart(exId);
   const el = $('#chart'), info = $('#chart-info');
   if (!el) return;
   const u = unit();
+  $('#chart-legend').innerHTML = `<span><i class="w"></i>Top weight (${u}) · right</span><span><i class="r"></i>Avg reps · left</span><span>dots = individual sets</span>`;
   const byDate = setsIndex().get(exId) || new Map();
   const sessions = [...byDate.keys()].sort().map(date => {
     const recs = byDate.get(date);
@@ -1057,6 +1077,79 @@ function drawHistoryChart(exId) {
   svg.addEventListener('pointerdown', pick);
   svg.addEventListener('pointermove', e => { if (e.pointerType === 'mouse' || e.buttons) pick(e); });
   show(sessions.length - 1);
+}
+
+/** Every set as a dot: weight across, reps up. Identical sets merge into a bigger dot; older ones fade. */
+function drawScatterChart(exId) {
+  const el = $('#chart'), info = $('#chart-info');
+  if (!el) return;
+  const u = unit();
+  $('#chart-legend').innerHTML = `<span><i class="s"></i>each dot = reps ⋅ ${u}</span><span>bigger = more sets</span><span>faded = older</span>`;
+  const byDate = setsIndex().get(exId) || new Map();
+  const dates = [...byDate.keys()].sort();
+  const groups = new Map();            // "reps|weight" -> { reps, w, n, last (date index), dates }
+  dates.forEach((date, di) => byDate.get(date).forEach(r => {
+    if (r.reps == null || r.weight == null) return;
+    const w = roundW(conv(r.weight, r.unit, u), u), key = `${r.reps}|${w}`;
+    let gp = groups.get(key);
+    if (!gp) groups.set(key, (gp = { reps: r.reps, w, n: 0, last: di, dates: [] }));
+    gp.n++; gp.last = di;
+    if (gp.dates[gp.dates.length - 1] !== date) gp.dates.push(date);
+  }));
+  const pts = [...groups.values()];
+  if (!pts.length) {
+    el.innerHTML = '<div class="chart-empty">Log sets with both reps and weight to see them here.</div>';
+    info.textContent = '';
+    return;
+  }
+  const W = Math.max(260, Math.floor(el.clientWidth)), H = Math.round(Math.max(210, Math.min(320, W * 0.6)));
+  const m = { l: 34, r: 14, t: 20, b: 38 }, iw = W - m.l - m.r, ih = H - m.t - m.b;
+  const sx = tightScale(Math.min(...pts.map(p => p.reps)), Math.max(...pts.map(p => p.reps)), true);
+  const sy = tightScale(Math.min(...pts.map(p => p.w)), Math.max(...pts.map(p => p.w)), false);
+  const X = r => m.l + iw * (r - sx.lo) / (sx.step * sx.n);          // reps →
+  const Y = w => m.t + ih * (1 - (w - sy.lo) / (sy.step * sy.n));    // weight ↑
+
+  let g = '';
+  for (let i = 0; i <= sy.n; i++) {
+    const y = (m.t + ih * (1 - i / sy.n)).toFixed(1);
+    g += `<line class="grid" x1="${m.l}" x2="${m.l + iw}" y1="${y}" y2="${y}"/>`;
+    g += `<text class="ax-w" x="${m.l - 6}" y="${+y + 4}" text-anchor="end">${num(sy.lo + i * sy.step)}</text>`;
+  }
+  for (let i = 0; i <= sx.n; i++) {
+    const x = (m.l + iw * i / sx.n).toFixed(1);
+    g += `<line class="grid" x1="${x}" x2="${x}" y1="${m.t}" y2="${m.t + ih}"/>`;
+    g += `<text class="ax-r" x="${x}" y="${m.t + ih + 15}" text-anchor="${i === 0 ? 'start' : i === sx.n ? 'end' : 'middle'}">${num(sx.lo + i * sx.step)}</text>`;
+  }
+  g += `<text class="ax-w ttl" x="${m.l - 6}" y="${m.t - 8}" text-anchor="end">${u}</text>`;
+  g += `<text class="ax-r ttl" x="${m.l + iw / 2}" y="${H - 4}" text-anchor="middle">reps</text>`;
+
+  const span = Math.max(1, dates.length - 1);
+  const rad = p => Math.min(11, 3.5 + 2 * Math.sqrt(p.n - 1));
+  pts.sort((a, b) => a.last - b.last || b.n - a.n);   // newest drawn on top
+  pts.forEach(p => {
+    const op = dates.length > 1 ? 0.25 + 0.75 * (p.last / span) : 1;
+    g += `<circle class="sc" cx="${X(p.reps).toFixed(1)}" cy="${Y(p.w).toFixed(1)}" r="${rad(p).toFixed(1)}" fill-opacity="${op.toFixed(2)}"/>`;
+  });
+  g += `<circle class="sc-sel" id="sc-sel" r="0"/>`;
+  el.innerHTML = `<svg class="chart" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="Weight versus reps">${g}</svg>`;
+
+  const svg = el.querySelector('svg'), sel = $('#sc-sel');
+  const show = p => {
+    sel.setAttribute('cx', X(p.reps)); sel.setAttribute('cy', Y(p.w)); sel.setAttribute('r', rad(p) + 3);
+    const lastD = p.dates[p.dates.length - 1];
+    info.innerHTML = `<b>${esc(fmtSet({ reps: p.reps, weight: p.w, unit: u }, u))}</b>: ${p.n} set${p.n === 1 ? '' : 's'}`
+      + `${p.dates.length > 1 ? ` on ${p.dates.length} days` : ''}, last ${esc(fmtDate(lastD))}`;
+  };
+  const pick = e => {
+    const r = svg.getBoundingClientRect();
+    const x = (e.clientX - r.left) * (W / r.width), y = (e.clientY - r.top) * (H / r.height);
+    let best = pts[0], bd = Infinity;
+    pts.forEach(p => { const d = (X(p.reps) - x) ** 2 + (Y(p.w) - y) ** 2; if (d < bd) { bd = d; best = p; } });
+    show(best);
+  };
+  svg.addEventListener('pointerdown', pick);
+  svg.addEventListener('pointermove', e => { if (e.pointerType === 'mouse' || e.buttons) pick(e); });
+  show(pts[pts.length - 1]);           // a set from the latest session
 }
 
 /* =========================================================
@@ -1290,6 +1383,11 @@ const A = {
     const row = el.closest('.ex');
     openSwipe(row);
     $('.ex-note', row).focus({ preventScroll: true });
+  },
+  'hist-chart': el => {
+    setCfg('histChart', el.dataset.v);
+    $$('[data-act="hist-chart"]').forEach(b => b.classList.toggle('on', b === el));
+    drawHistoryChart(view.exId);
   },
   'ex-unskip': el => { Store.del('cfg', skipKey(view.date, el.dataset.ex)); render(); },
   'add-set': el => {

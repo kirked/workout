@@ -321,6 +321,37 @@ button.last { text-decoration: underline dotted rgba(142,142,147,.6); text-under
 .seg.seg-sm { margin: 0 8px 10px; }
 .seg.seg-sm button { padding: 5px 6px; font-size: 13px; }
 .chart-legend i.s { width: 9px; height: 9px; border-radius: 50%; background: var(--weight); }
+/* ---------- Body measurements ---------- */
+.date-step { display: flex; align-items: center; gap: 8px; padding: 10px 12px; }
+.date-step-t { flex: 1; min-width: 0; text-align: center; font-size: 17px; font-weight: 700; }
+.date-step-t .kicker { margin: 0; font-size: 11px; }
+.meas-row { display: flex; align-items: center; gap: 10px; padding: 8px 14px 8px 16px; border-top: .5px solid var(--sep); }
+.card-head + .meas-row, .meas-card > .meas-row:first-child { border-top: 0; }
+.meas-name { flex: 1; min-width: 0; font-weight: 600; }
+.meas-prev { font-size: 12px; font-weight: 400; color: var(--muted); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.meas-box {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 3px; width: 98px; padding: 0 9px 0 4px;
+  background: var(--fill); border: 1.5px solid transparent; border-radius: 11px; transition: background .15s, border-color .15s;
+}
+.meas-box:focus-within { border-color: var(--accent); background: var(--card); }
+.meas-in {
+  flex: 1; min-width: 0; width: 100%; border: 0; margin: 0; background: transparent; outline: none;
+  font-family: inherit; font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums;
+  text-align: right; color: var(--text); padding: 9px 0; -webkit-appearance: none; appearance: none;
+}
+.meas-in::placeholder { color: var(--muted); opacity: .5; font-weight: 400; }
+.meas-u { flex: 0 0 auto; font-size: 13px; color: var(--muted); }
+.meas-alt { flex: 0 0 62px; text-align: right; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.card-head .seg.seg-sm { margin: 0; flex: 0 0 104px; }
+.card-head h2.sm { font-size: 17px; }
+.mrow { display: flex; gap: 12px; width: 100%; padding: 11px 16px; border: 0; border-top: .5px solid var(--sep); background: none; text-align: left; font-variant-numeric: tabular-nums; }
+.mrow:first-child { border-top: 0; }
+.mrow:active { background: var(--fill); }
+.mrow.on .hdate { color: var(--accent); }
+.mvals { flex: 1; min-width: 0; display: grid; grid-template-columns: auto auto auto; justify-content: start; gap: 2px 12px; font-size: 14px; }
+.mv { display: contents; }
+.mv-l { color: var(--muted); }
+.mv-o { color: var(--muted); }
 .chart-empty { color: var(--muted); text-align: center; padding: 50px 10px; font-size: 14px; }
 .chart-legend { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 16px; padding: 8px 8px 0; font-size: 12px; color: var(--muted); }
 .chart-legend i { display: inline-block; width: 14px; height: 4px; border-radius: 2px; vertical-align: middle; margin-right: 5px; }
@@ -423,6 +454,7 @@ button.last { text-decoration: underline dotted rgba(142,142,147,.6); text-under
   <div class="bar">
     <div class="title" id="title">Workout</div>
     <button class="icon-btn" id="btn-hist" data-act="hist-toggle" aria-label="History" title="History"></button>
+    <button class="icon-btn" id="btn-body" data-act="body-toggle" aria-label="Body measurements" title="Body measurements"></button>
     <button class="unit-toggle" id="unit-toggle" data-act="unit" aria-label="Toggle weight unit" title="Toggle lb / kg"><span data-u="lb">lb</span><span data-u="kg">kg</span></button>
     <button class="icon-btn" id="btn-export" data-act="export" aria-label="Export CSV" title="Export CSV"></button>
   </div>
@@ -469,11 +501,13 @@ function fmtDateLong(s) {
      wt.ex.<id>                 exercise    {id,bpId,name,sets,order,deleted?}
      wt.sch.<w|m><day>_<bpId>   schedule    {fmt,day,bpId}
      wt.set.<date>_<exId>_<n>   one set     {date,exId,bpId,set,reps,weight,unit,ts}
+     wt.note.<date>_<exId>      note        {date,exId,bpId,text,ts}
+     wt.meas.<date>_<metric>    body measurement {date,metric,v,u,ts}  (u = lb|kg|in|cm, as entered)
      wt.cfg.<key>               setting
    ========================================================= */
 const PFX = 'wt.';
 const Store = {
-  bp: new Map(), ex: new Map(), sch: new Map(), set: new Map(), note: new Map(), cfg: new Map(),
+  bp: new Map(), ex: new Map(), sch: new Map(), set: new Map(), note: new Map(), meas: new Map(), cfg: new Map(),
   load() {
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
@@ -498,7 +532,7 @@ const Store = {
     const keys = [];
     for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k && k.startsWith(PFX)) keys.push(k); }
     keys.forEach(k => localStorage.removeItem(k));
-    ['bp', 'ex', 'sch', 'set', 'note', 'cfg'].forEach(t => this[t].clear());
+    ['bp', 'ex', 'sch', 'set', 'note', 'meas', 'cfg'].forEach(t => this[t].clear());
   },
 };
 
@@ -628,6 +662,9 @@ const ICON = {
   x: I('<path d="M7 7l10 10M17 7L7 17"/>', 'ico sm'),
   minus: I('<path d="M5 12h14"/>', 'ico sm'),
   check: I('<path d="M5 12.5l4.5 4.5L19 7.5"/>'),
+  ruler: I('<rect x="2.5" y="7.5" width="19" height="9" rx="1.5"/><path d="M6.5 7.5v3M10 7.5v4.5M13.5 7.5v3M17 7.5v4.5"/>'),
+  back: I('<path d="M14.5 6l-6 6 6 6"/>', 'ico sm'),
+  fwd: I('<path d="M9.5 6l6 6-6 6"/>', 'ico sm'),
 };
 
 /* =========================================================
@@ -706,8 +743,9 @@ function toast(msg) {
    Views
    ========================================================= */
 let view = { name: 'home' };
-let histReturn = null;               // view to return to when the history button is toggled off
-const TITLES = { home: 'Workout', past: 'Workout', pick: 'Workout', workout: 'Workout', exercises: 'Exercises', schedule: 'Schedule', history: 'History' };
+let histReturn = null;               // view to return to when the history / body button is toggled off
+const OVERLAYS = ['history', 'body'];  // views opened from the top-bar buttons
+const TITLES = { home: 'Workout', past: 'Workout', pick: 'Workout', workout: 'Workout', exercises: 'Exercises', schedule: 'Schedule', history: 'History', body: 'Body' };
 const TABS = [['exercises', 'Exercises', ICON.list], ['schedule', 'Schedule', ICON.cal], ['home', 'Workout', ICON.dumbbell]];
 const tabOf = n => ({ home: 'home', past: 'home', pick: 'home', workout: 'home', exercises: 'exercises', schedule: 'schedule' }[n] || '');
 
@@ -947,6 +985,112 @@ Mount.history = v => {
 };
 
 /* =========================================================
+   Body measurements — weight in lb/kg, lengths in in/cm. Each value keeps the unit it was typed in;
+   the other unit is shown alongside.
+   ========================================================= */
+const METRICS = [
+  { id: 'weight', label: 'Weight', kind: 'w' },
+  { id: 'shoulder', label: 'Shoulder', kind: 'len' },
+  { id: 'bust', label: 'Bust', kind: 'len' },
+  { id: 'belly', label: 'Belly', kind: 'len' },
+  { id: 'waist', label: 'Waist', kind: 'len' },
+  { id: 'hip', label: 'Hip', kind: 'len' },
+  { id: 'thigh', label: 'Thigh', kind: 'len' },
+];
+const CM_PER_IN = 2.54;
+const lenUnit = () => cfg('lenUnit', defaultUnit === 'lb' ? 'in' : 'cm');
+const measUnit = m => (m.kind === 'w' ? unit() : lenUnit());
+const otherUnit = u => ({ lb: 'kg', kg: 'lb', in: 'cm', cm: 'in' }[u]);
+function convM(v, from, to) {
+  if (v == null || from === to) return v;
+  if (from === 'in') return v * CM_PER_IN;
+  if (from === 'cm') return v / CM_PER_IN;
+  return conv(v, from, to);
+}
+const numM = (v, u) => String(+v.toFixed(u === 'in' ? 2 : 1));   // quarter inches survive; trailing zeros dropped
+const fmtM = (v, u) => `${numM(v, u)}${NB}${u}`;
+const measKey = (date, id) => `${date}_${id}`;
+const shortDate = d => fmtDate(d).replace(/^\w+ /, '');
+function prevMeas(id, before) {
+  let best = null;
+  for (const rec of Store.meas.values()) if (rec.metric === id && rec.date < before && (!best || rec.date > best.date)) best = rec;
+  return best;
+}
+
+function measRow(m, date) {
+  const rec = Store.meas.get(measKey(date, m.id)), u = measUnit(m), o = otherUnit(u), prev = prevMeas(m.id, date);
+  return `<div class="meas-row">
+    <div class="meas-name">${m.label}${prev ? `<div class="meas-prev">${esc(shortDate(prev.date))}: ${fmtM(convM(prev.v, prev.u, u), u)}</div>` : ''}</div>
+    <label class="meas-box"><input class="meas-in" data-m="${m.id}" inputmode="decimal" enterkeyhint="next" autocomplete="off"
+      aria-label="${m.label} (${u})" placeholder="–" value="${rec ? numM(convM(rec.v, rec.u, u), u) : ''}"><span class="meas-u">${u}</span></label>
+    <div class="meas-alt" data-alt="${m.id}">${rec ? fmtM(convM(rec.v, rec.u, o), o) : ''}</div>
+  </div>`;
+}
+
+function measHistHTML(cur) {
+  const byDate = new Map();
+  for (const rec of Store.meas.values()) byDate.set(rec.date, true);
+  const dates = [...byDate.keys()].sort().reverse();
+  if (!dates.length) return '<div class="empty-sm">Nothing recorded yet.</div>';
+  return dates.map(d => `<button class="mrow${d === cur ? ' on' : ''}" data-act="meas-open" data-date="${d}">
+    <span class="hdate">${esc(fmtDate(d))}</span><span class="mvals">${METRICS.map(m => {
+      const rec = Store.meas.get(measKey(d, m.id));
+      if (!rec) return '';
+      const u = measUnit(m), o = otherUnit(u);
+      return `<span class="mv"><span class="mv-l">${m.label}</span><span>${fmtM(convM(rec.v, rec.u, u), u)}</span><span class="mv-o">${fmtM(convM(rec.v, rec.u, o), o)}</span></span>`;
+    }).join('')}</span></button>`).join('');
+}
+
+Views.body = v => {
+  const t = today();
+  if (!v.date || v.date > t) v.date = t;
+  const date = v.date, minD = dstr(monthAgo(pdate(t))), lu = lenUnit();
+  const [wm, ...lens] = METRICS;
+  return `<div class="card date-step">
+      <button class="icon-btn sm" data-act="meas-day" data-d="-1" aria-label="Previous day"${date <= minD ? ' disabled' : ''}>${ICON.back}</button>
+      <div class="date-step-t"><div class="kicker">${date === t ? 'Today' : 'Body measurements'}</div>${esc(fmtDateLong(date))}</div>
+      <button class="icon-btn sm" data-act="meas-day" data-d="1" aria-label="Next day"${date >= t ? ' disabled' : ''}>${ICON.fwd}</button>
+    </div>
+    <section class="card meas-card">${measRow(wm, date)}</section>
+    <section class="card meas-card">
+      <div class="card-head"><h2 class="sm">Measurements</h2>
+        <div class="seg seg-sm" role="tablist">${['in', 'cm'].map(k =>
+          `<button data-act="len-unit" data-v="${k}" class="${lu === k ? 'on' : ''}" role="tab">${k}</button>`).join('')}</div></div>
+      ${lens.map(m => measRow(m, date)).join('')}
+    </section>
+    <p class="note">Saved as you type, in the unit you typed. Weight follows the lb / kg switch above.</p>
+    <h3 class="section-h">History</h3>
+    <div class="card list" id="meas-hist">${measHistHTML(date)}</div>`;
+};
+
+function saveMeasInput(inp) {
+  inp.value = inp.value.replace(/[^\d.,]/g, '');
+  const m = METRICS.find(x => x.id === inp.dataset.m), date = view.date, key = measKey(date, m.id);
+  const txt = inp.value.trim().replace(',', '.'), v = txt === '' ? NaN : parseFloat(txt);
+  const alt = $(`[data-alt="${m.id}"]`);
+  if (!Number.isFinite(v)) {
+    if (Store.meas.has(key)) Store.del('meas', key);
+    alt.textContent = '';
+  } else {
+    const u = measUnit(m), o = otherUnit(u);
+    Store.put('meas', key, { date, metric: m.id, v, u, ts: Date.now() });
+    alt.textContent = fmtM(convM(v, u, o), o);
+  }
+  $('#meas-hist').innerHTML = measHistHTML(date);
+}
+
+function buildBodyCSV() {
+  const dates = [...new Set([...Store.meas.values()].map(r => r.date))].sort();
+  const units = m => (m.kind === 'w' ? ['lb', 'kg'] : ['in', 'cm']);
+  const header = ['Date', ...METRICS.flatMap(m => units(m).map(u => `${m.label} (${u})`))];
+  const rows = dates.map(d => [d, ...METRICS.flatMap(m => {
+    const rec = Store.meas.get(measKey(d, m.id));
+    return units(m).map(u => (!rec ? '' : rec.u === u ? rec.v : +numM(convM(rec.v, rec.u, u), u)));
+  })]);
+  return [header, ...rows].map(r => r.map(csvCell).join(',')).join('\r\n') + '\r\n';
+}
+
+/* =========================================================
    Chart (SVG)
    ========================================================= */
 function niceStep(raw, int) {
@@ -1158,6 +1302,7 @@ function drawScatterChart(exId) {
 function renderChrome() {
   $('#title').textContent = TITLES[view.name] || 'Workout';
   $('#btn-hist').classList.toggle('on', view.name === 'history');
+  $('#btn-body').classList.toggle('on', view.name === 'body');
   $$('#unit-toggle span').forEach(s => s.classList.toggle('on', s.dataset.u === unit()));
   $$('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.v === tabOf(view.name)));
 }
@@ -1175,6 +1320,13 @@ function go(v, { keepScroll = false } = {}) {
   try { sessionStorage.setItem('wt.view', JSON.stringify(view)); } catch (e) { /* ignore */ }
   render();
   if (!keepScroll) $('#scroller').scrollTop = scrollY || 0;
+}
+
+/** Top-bar History / Body buttons: open the view, or close it and return to where you were. */
+function toggleOverlay(name) {
+  if (view.name === name) { const back = histReturn || { name: 'home' }; histReturn = null; return go(back); }
+  if (!OVERLAYS.includes(view.name)) histReturn = { ...view, scrollY: $('#scroller').scrollTop };
+  go({ name });
 }
 
 function startWorkout() {
@@ -1307,9 +1459,10 @@ function buildCSV(u) {
   return [header, ...rows].map(r => r.map(csvCell).join(',')).join('\r\n') + '\r\n';
 }
 
-function downloadCSV(u) {
-  const name = `workout-${today()}-${u}.csv`;
-  const text = '\uFEFF' + buildCSV(u);
+function downloadCSV(u) { saveCSV(`workout-${today()}-${u}.csv`, buildCSV(u)); }
+
+function saveCSV(name, csv) {
+  const text = '\uFEFF' + csv;
   const blob = new Blob([text], { type: 'text/csv;charset=utf-8' });
   // Home-screen web apps on iOS can't use <a download>; use the share sheet there.
   if (navigator.standalone && typeof File === 'function') {
@@ -1324,6 +1477,7 @@ function downloadCSV(u) {
 }
 
 function exportFlow() {
+  if (view.name === 'body') return exportBodyFlow();
   let u = unit();
   const nSets = Store.set.size, nEx = new Set([...Store.set.values()].map(r => r.exId)).size;
   const body = `<p class="sheet-note">${nSets} set${nSets === 1 ? '' : 's'} logged across ${nEx} exercise${nEx === 1 ? '' : 's'}.<br>Choose the weight unit for the file:</p>
@@ -1342,6 +1496,20 @@ function exportFlow() {
   });
 }
 
+function exportBodyFlow() {
+  const n = new Set([...Store.meas.values()].map(r => r.date)).size;
+  const body = `<p class="sheet-note">Body measurements on ${n} day${n === 1 ? '' : 's'}.<br>Every value is included in both units.</p>
+    <div class="form-actions"><button class="btn" data-cancel>Cancel</button><button class="btn primary" data-go>${ICON.dl} Download CSV</button></div>`;
+  sheet('Export measurements', body, (s, close) => {
+    s.addEventListener('click', e => {
+      const b = e.target.closest('button');
+      if (!b) return;
+      if ('cancel' in b.dataset) close();
+      else if ('go' in b.dataset) { saveCSV(`body-${today()}.csv`, buildBodyCSV()); close(); }
+    });
+  });
+}
+
 /* =========================================================
    Actions (event delegation via data-act)
    ========================================================= */
@@ -1349,12 +1517,17 @@ const A = {
   tab: el => go({ name: el.dataset.v }),
   unit: () => { setCfg('unit', unit() === 'lb' ? 'kg' : 'lb'); render(); },
   export: () => exportFlow(),
-  'hist-toggle': () => {
-    if (view.name === 'history') { const back = histReturn || { name: 'home' }; histReturn = null; go(back); }
-    else { histReturn = { ...view, scrollY: $('#scroller').scrollTop }; go({ name: 'history' }); }
+  'hist-toggle': () => toggleOverlay('history'),
+  'body-toggle': () => toggleOverlay('body'),
+  'meas-day': el => {
+    const d = pdate(view.date || today());
+    d.setDate(d.getDate() + +el.dataset.d);
+    go({ ...view, date: dstr(d) }, { keepScroll: true });
   },
+  'meas-open': el => go({ ...view, date: el.dataset.date }),
+  'len-unit': el => { setCfg('lenUnit', el.dataset.v); render(); },
   hist: el => {
-    if (view.name !== 'history') histReturn = { ...view, scrollY: $('#scroller').scrollTop };
+    if (!OVERLAYS.includes(view.name)) histReturn = { ...view, scrollY: $('#scroller').scrollTop };
     setCfg('histEx', el.dataset.ex);
     go({ name: 'history', exId: el.dataset.ex });
   },
@@ -1596,6 +1769,7 @@ function initSwipe(main) {
 function init() {
   Store.load();
   $('#btn-hist').innerHTML = ICON.clock;
+  $('#btn-body').innerHTML = ICON.ruler;
   $('#btn-export').innerHTML = ICON.dl;
   $('#tabs').innerHTML = TABS.map(([v, label, icon]) => `<button data-act="tab" data-v="${v}">${icon}<span>${label}</span></button>`).join('');
 
@@ -1608,15 +1782,16 @@ function init() {
   initSwipe(main);
   main.addEventListener('input', e => {
     if (e.target.matches('.set input')) saveSetInput(e.target);
+    if (e.target.matches('.meas-in')) saveMeasInput(e.target);
     if (e.target.matches('.ex-note')) {
       saveNote(view.date, e.target.dataset.ex, e.target.value);
       $('.ex-main .note-mark', e.target.closest('.ex')).hidden = !e.target.value.trim();
     }
   });
   main.addEventListener('keydown', e => {
-    if (e.key === 'Enter' && e.target.matches('.set input')) {
+    if (e.key === 'Enter' && e.target.matches('.set input, .meas-in')) {
       e.preventDefault();
-      const all = $$('.set input'), i = all.indexOf(e.target);
+      const all = $$(e.target.matches('.meas-in') ? '.meas-in' : '.set input'), i = all.indexOf(e.target);
       (all[i + 1] || e.target).focus();
     }
   });

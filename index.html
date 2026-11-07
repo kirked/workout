@@ -340,6 +340,9 @@ button.last { text-decoration: underline dotted rgba(142,142,147,.6); text-under
 }
 .meas-in::placeholder { color: var(--muted); opacity: .5; font-weight: 400; }
 .meas-u { flex: 0 0 auto; font-size: 13px; color: var(--muted); }
+.meas-box.ro { background: none; }
+.meas-u.ph { visibility: hidden; }
+.meas-row .seg.seg-sm { margin: 0; flex: 0 0 170px; }
 .meas-alt { flex: 0 0 62px; text-align: right; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .card-head .seg.seg-sm { margin: 0; flex: 0 0 104px; }
 .card-head h2.sm { font-size: 17px; }
@@ -513,7 +516,7 @@ function fmtDateLong(s) {
      wt.set.<date>_<exId>_<n>   one set     {date,exId,bpId,set,reps,weight,unit,ts}
      wt.note.<date>_<exId>      note        {date,exId,bpId,text,ts}
      wt.meas.<date>_<metric>    body measurement {date,metric,v,u,ts}  (u = lb|kg|in|cm, as entered)
-     wt.cfg.<key>               setting
+     wt.cfg.<key>               setting  (cfg.height = {v,u,ts}: one height, not tracked by date; cfg.sex = m|f)
    ========================================================= */
 const PFX = 'wt.';
 const Store = {
@@ -1000,6 +1003,7 @@ Mount.history = v => {
    ========================================================= */
 const METRICS = [
   { id: 'weight', label: 'Weight', kind: 'w' },
+  { id: 'neck', label: 'Neck', kind: 'len' },
   { id: 'shoulder', label: 'Shoulder', kind: 'len' },
   { id: 'bust', label: 'Bust', kind: 'len' },
   { id: 'belly', label: 'Belly', kind: 'len' },
@@ -1021,6 +1025,60 @@ const numM = (v, u) => String(+v.toFixed(u === 'in' ? 2 : 1));   // quarter inch
 const fmtM = (v, u) => `${numM(v, u)}${NB}${u}`;
 const measKey = (date, id) => `${date}_${id}`;
 const shortDate = d => fmtDate(d).replace(/^\w+ /, '');
+const heightRec = () => cfg('height', null);
+/** BMI = kg / m², from that day's weight and the single stored height. */
+function bmiOf(date) {
+  const w = Store.meas.get(measKey(date, 'weight')), h = heightRec();
+  if (!w || !h || !(h.v > 0)) return null;
+  const m = convM(h.v, h.u, 'cm') / 100;
+  return convM(w.v, w.u, 'kg') / (m * m);
+}
+const fmtBmi = b => (b == null ? '' : b.toFixed(1));
+function fmtFtIn(h) {
+  let inch = Math.round(convM(h.v, h.u, 'in')), ft = Math.floor(inch / 12);
+  inch -= ft * 12;
+  return `${ft}′${NB}${inch}″`;
+}
+const sexOf = () => cfg('sex', null);                      // 'm' | 'f'
+const inOf = (date, id) => { const rec = Store.meas.get(measKey(date, id)); return rec ? convM(rec.v, rec.u, 'in') : null; };
+/** Body fat % by the U.S. Navy tape method, from one day's measurements (inches).
+    Men: neck + belly at the navel (waist if no belly). Women: neck + waist + hip.
+    Returns { bf } or { why } explaining what is missing. */
+function bodyFatCalc(date) {
+  const sex = sexOf(), h = heightRec();
+  if (!sex) return { why: 'Choose sex below' };
+  if (!h) return { why: 'Enter your height below' };
+  const neck = inOf(date, 'neck'), miss = [];
+  if (neck == null) miss.push('neck');
+  let girth = 0;
+  if (sex === 'm') {
+    const ab = inOf(date, 'belly') ?? inOf(date, 'waist');
+    if (ab == null) miss.push('belly'); else girth = ab;
+  } else {
+    const w = inOf(date, 'waist'), hp = inOf(date, 'hip');
+    if (w == null) miss.push('waist');
+    if (hp == null) miss.push('hip');
+    girth = (w ?? 0) + (hp ?? 0);
+  }
+  if (miss.length) return { why: `Needs ${miss.join(', ')}` };
+  const x = girth - neck, ht = convM(h.v, h.u, 'in');
+  const bf = !(x > 0) ? NaN : sex === 'm'
+    ? 86.010 * Math.log10(x) - 70.041 * Math.log10(ht) + 36.76
+    : 163.205 * Math.log10(x) - 97.684 * Math.log10(ht) - 78.387;
+  return bf > 2 && bf < 70 ? { bf } : { why: 'Check neck / waist values' };
+}
+const bodyFatOf = date => bodyFatCalc(date).bf ?? null;
+/** Lean (fat-free) mass: that day's weight minus fat. */
+function leanOf(date) {
+  const bf = bodyFatOf(date), w = Store.meas.get(measKey(date, 'weight'));
+  return bf == null || !w ? null : { kg: convM(w.v, w.u, 'kg') * (1 - bf / 100), pct: 100 - bf };
+}
+/** Most recent earlier day on which fn(date) has a value. */
+function prevDerived(date, fn) {
+  const dates = [...new Set([...Store.meas.values()].map(rec => rec.date))].filter(d => d < date).sort().reverse();
+  for (const d of dates) { const v = fn(d); if (v != null) return { d, v }; }
+  return null;
+}
 function prevMeas(id, before) {
   let best = null;
   for (const rec of Store.meas.values()) if (rec.metric === id && rec.date < before && (!best || rec.date > best.date)) best = rec;
@@ -1037,18 +1095,80 @@ function measRow(m, date) {
   </div>`;
 }
 
+/** Text for the calculated rows (BMI, body fat, lean mass) on one day. */
+function derivedText(date) {
+  const u = unit(), o = otherUnit(u);
+  const b = bmiOf(date), pb = prevDerived(date, bmiOf);
+  const f = bodyFatCalc(date), pf = prevDerived(date, bodyFatOf);
+  const l = leanOf(date);
+  return {
+    bmi: b == null ? '–' : fmtBmi(b),
+    bmiSub: !heightRec() ? 'Enter your height below' : pb ? `${shortDate(pb.d)}: ${fmtBmi(pb.v)}` : '',
+    bf: f.bf == null ? '–' : f.bf.toFixed(1),
+    bfSub: f.bf == null ? f.why : pf ? `${shortDate(pf.d)}: ${pf.v.toFixed(1)}${NB}%` : 'U.S. Navy tape method',
+    lean: l ? numM(convM(l.kg, 'kg', u), u) : '–',
+    leanAlt: l ? fmtM(convM(l.kg, 'kg', o), o) : '',
+    leanSub: l ? `${l.pct.toFixed(1)}${NB}% of weight` : f.bf != null ? 'Needs weight' : '',
+  };
+}
+const DERIVED = [['bmi', 'BMI', () => ''], ['bf', 'Body fat', () => '%'], ['lean', 'Lean mass', () => unit()]];
+function derivedRows(date) {
+  const d = derivedText(date);
+  return DERIVED.map(([id, label, u]) => `<div class="meas-row">
+    <div class="meas-name">${label}<div class="meas-prev" id="${id}-sub">${esc(d[id + 'Sub'])}</div></div>
+    <div class="meas-box ro"><output class="meas-in" id="${id}-v">${d[id]}</output><span class="meas-u${u() ? '' : ' ph'}">${u() || 'lb'}</span></div>
+    <div class="meas-alt" id="${id}-alt">${d[id + 'Alt'] || ''}</div>
+  </div>`).join('');
+}
+function refreshDerived(date) {
+  const d = derivedText(date);
+  for (const [id] of DERIVED) {
+    $(`#${id}-v`).textContent = d[id];
+    $(`#${id}-sub`).textContent = d[id + 'Sub'];
+    $(`#${id}-alt`).textContent = d[id + 'Alt'] || '';
+  }
+}
+
+function sexRow() {
+  const sx = sexOf();
+  return `<div class="meas-row">
+    <div class="meas-name">Sex<div class="meas-prev">Used for body fat %</div></div>
+    <div class="seg seg-sm" role="tablist">${[['m', 'Male'], ['f', 'Female']].map(([k, l]) =>
+      `<button data-act="sex" data-v="${k}" class="${sx === k ? 'on' : ''}" role="tab">${l}</button>`).join('')}</div>
+  </div>`;
+}
+
+function heightRow() {
+  const h = heightRec(), u = lenUnit(), o = otherUnit(u);
+  return `<div class="meas-row">
+    <div class="meas-name">Height<div class="meas-prev" id="height-sub">${h ? `${fmtFtIn(h)} · not tracked by date` : 'Used for BMI · not tracked by date'}</div></div>
+    <label class="meas-box"><input class="meas-in" id="height-in" inputmode="decimal" enterkeyhint="done" autocomplete="off"
+      aria-label="Height (${u})" placeholder="–" value="${h ? numM(convM(h.v, h.u, u), u) : ''}"><span class="meas-u">${u}</span></label>
+    <div class="meas-alt" id="height-alt">${h ? fmtM(convM(h.v, h.u, o), o) : ''}</div>
+  </div>`;
+}
+
 function measHistHTML(cur) {
   const byDate = new Map();
   for (const rec of Store.meas.values()) byDate.set(rec.date, true);
   const dates = [...byDate.keys()].sort().reverse();
   if (!dates.length) return '<div class="empty-sm">Nothing recorded yet.</div>';
-  return dates.map(d => `<button class="mrow${d === cur ? ' on' : ''}" data-act="meas-open" data-date="${d}">
-    <span class="hdate">${esc(fmtDate(d))}</span><span class="mvals">${METRICS.map(m => {
+  const wu = unit(), wo = otherUnit(wu);
+  const line = (label, a, b = '') => `<span class="mv"><span class="mv-l">${label}</span><span>${a}</span><span class="mv-o">${b}</span></span>`;
+  return dates.map(d => {
+    const vals = METRICS.map(m => {
       const rec = Store.meas.get(measKey(d, m.id));
       if (!rec) return '';
       const u = measUnit(m), o = otherUnit(u);
-      return `<span class="mv"><span class="mv-l">${m.label}</span><span>${fmtM(convM(rec.v, rec.u, u), u)}</span><span class="mv-o">${fmtM(convM(rec.v, rec.u, o), o)}</span></span>`;
-    }).join('')}</span></button>`).join('');
+      return line(m.label, fmtM(convM(rec.v, rec.u, u), u), fmtM(convM(rec.v, rec.u, o), o));
+    });
+    const b = bmiOf(d), bf = bodyFatOf(d), l = leanOf(d);
+    vals.splice(1, 0, (b == null ? '' : line('BMI', fmtBmi(b)))
+      + (bf == null ? '' : line('Body fat', `${bf.toFixed(1)}${NB}%`))
+      + (l ? line('Lean mass', fmtM(convM(l.kg, 'kg', wu), wu), fmtM(convM(l.kg, 'kg', wo), wo)) : ''));
+    return `<button class="mrow${d === cur ? ' on' : ''}" data-act="meas-open" data-date="${d}">
+      <span class="hdate">${esc(fmtDate(d))}</span><span class="mvals">${vals.join('')}</span></button>`;
+  }).join('');
 }
 
 Views.body = v => {
@@ -1061,14 +1181,16 @@ Views.body = v => {
       <div class="date-step-t"><div class="kicker">${date === t ? 'Today' : 'Body measurements'}</div>${esc(fmtDateLong(date))}</div>
       <button class="icon-btn sm" data-act="meas-day" data-d="1" aria-label="Next day"${date >= t ? ' disabled' : ''}>${ICON.fwd}</button>
     </div>
-    <section class="card meas-card">${measRow(wm, date)}</section>
+    <section class="card meas-card">${measRow(wm, date)}${derivedRows(date)}</section>
     <section class="card meas-card">
       <div class="card-head"><h2 class="sm">Measurements</h2>
         <div class="seg seg-sm" role="tablist">${['in', 'cm'].map(k =>
           `<button data-act="len-unit" data-v="${k}" class="${lu === k ? 'on' : ''}" role="tab">${k}</button>`).join('')}</div></div>
       ${lens.map(m => measRow(m, date)).join('')}
     </section>
-    <p class="note">Saved as you type, in the unit you typed. Weight follows the lb / kg switch above.</p>
+    <section class="card meas-card">${heightRow()}${sexRow()}</section>
+    <p class="note">Saved as you type, in the unit you typed. Weight follows the lb / kg switch above; height and measurements follow in / cm.</p>
+    <p class="note">Body fat uses the U.S. Navy tape method with that day’s measurements: neck and belly (at the navel) for men; neck, waist (narrowest point) and hip (widest point) for women. Expect about ±3–4 points versus a DEXA scan; it is best for trends.</p>
     <h3 class="section-h">History</h3>
     <div class="card list" id="meas-hist">${measHistHTML(date)}</div>`;
 };
@@ -1086,17 +1208,36 @@ function saveMeasInput(inp) {
     Store.put('meas', key, { date, metric: m.id, v, u, ts: Date.now() });
     alt.textContent = fmtM(convM(v, u, o), o);
   }
+  refreshDerived(date);
   $('#meas-hist').innerHTML = measHistHTML(date);
+}
+
+function saveHeightInput(inp) {
+  inp.value = inp.value.replace(/[^\d.,]/g, '');
+  const txt = inp.value.trim().replace(',', '.'), v = txt === '' ? NaN : parseFloat(txt);
+  const u = lenUnit(), o = otherUnit(u);
+  if (Number.isFinite(v) && v > 0) setCfg('height', { v, u, ts: Date.now() });
+  else if (Store.cfg.has('height')) Store.del('cfg', 'height');
+  const h = heightRec();
+  $('#height-alt').textContent = h ? fmtM(convM(h.v, h.u, o), o) : '';
+  $('#height-sub').textContent = h ? `${fmtFtIn(h)} · not tracked by date` : 'Used for BMI · not tracked by date';
+  refreshDerived(view.date);
+  $('#meas-hist').innerHTML = measHistHTML(view.date);
 }
 
 function buildBodyCSV() {
   const dates = [...new Set([...Store.meas.values()].map(r => r.date))].sort();
   const units = m => (m.kind === 'w' ? ['lb', 'kg'] : ['in', 'cm']);
-  const header = ['Date', ...METRICS.flatMap(m => units(m).map(u => `${m.label} (${u})`))];
-  const rows = dates.map(d => [d, ...METRICS.flatMap(m => {
-    const rec = Store.meas.get(measKey(d, m.id));
-    return units(m).map(u => (!rec ? '' : rec.u === u ? rec.v : +numM(convM(rec.v, rec.u, u), u)));
-  })]);
+  const cell = (rec, u) => (!rec ? '' : rec.u === u ? rec.v : +numM(convM(rec.v, rec.u, u), u));
+  const lens = METRICS.filter(m => m.kind === 'len');
+  const header = ['Date', 'Weight (lb)', 'Weight (kg)', 'BMI', 'Body fat (%)', 'Lean mass (lb)', 'Lean mass (kg)',
+    ...lens.flatMap(m => units(m).map(u => `${m.label} (${u})`))];
+  const rows = dates.map(d => {
+    const w = Store.meas.get(measKey(d, 'weight')), bf = bodyFatOf(d), l = leanOf(d);
+    return [d, cell(w, 'lb'), cell(w, 'kg'), fmtBmi(bmiOf(d)), bf == null ? '' : bf.toFixed(1),
+      l ? +numM(convM(l.kg, 'kg', 'lb'), 'lb') : '', l ? +numM(l.kg, 'kg') : '',
+      ...lens.flatMap(m => units(m).map(u => cell(Store.meas.get(measKey(d, m.id)), u)))];
+  });
   return [header, ...rows].map(r => r.map(csvCell).join(',')).join('\r\n') + '\r\n';
 }
 
@@ -1536,6 +1677,7 @@ const A = {
   },
   'meas-open': el => go({ ...view, date: el.dataset.date }),
   'len-unit': el => { setCfg('lenUnit', el.dataset.v); render(); },
+  sex: el => { setCfg('sex', el.dataset.v); render(); },
   hist: el => {
     if (!OVERLAYS.includes(view.name)) histReturn = { ...view, scrollY: $('#scroller').scrollTop };
     setCfg('histEx', el.dataset.ex);
@@ -1792,7 +1934,8 @@ function init() {
   initSwipe(main);
   main.addEventListener('input', e => {
     if (e.target.matches('.set input')) saveSetInput(e.target);
-    if (e.target.matches('.meas-in')) saveMeasInput(e.target);
+    if (e.target.matches('.meas-in[data-m]')) saveMeasInput(e.target);
+    if (e.target.id === 'height-in') saveHeightInput(e.target);
     if (e.target.matches('.ex-note')) {
       saveNote(view.date, e.target.dataset.ex, e.target.value);
       $('.ex-main .note-mark', e.target.closest('.ex')).hidden = !e.target.value.trim();
@@ -1801,7 +1944,7 @@ function init() {
   main.addEventListener('keydown', e => {
     if (e.key === 'Enter' && e.target.matches('.set input, .meas-in')) {
       e.preventDefault();
-      const all = $$(e.target.matches('.meas-in') ? '.meas-in' : '.set input'), i = all.indexOf(e.target);
+      const all = $$(e.target.matches('.meas-in') ? 'input.meas-in' : '.set input'), i = all.indexOf(e.target);
       (all[i + 1] || e.target).focus();
     }
   });

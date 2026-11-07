@@ -50,7 +50,8 @@
   --danger: #ff3b30;
   --set-dot: #3a3a3c;
   --note: #a00000;
-  --bar-bg: rgba(242, 242, 247, .85);
+  --bar-bg: #f2f2f7;
+  --update: #187a33;
   --shadow: 0 1px 2px rgba(0,0,0,.04), 0 4px 16px rgba(0,0,0,.04);
   --radius: 14px;
 }
@@ -70,7 +71,7 @@
     --danger: #ff453a;
     --set-dot: #d1d1d6;
     --note: #ff6b6b;
-    --bar-bg: rgba(18, 18, 20, .82);
+    --bar-bg: #121214;
     --shadow: none;
   }
 }
@@ -104,8 +105,6 @@ h1, h2, h3 { margin: 0; }
   flex: 0 0 auto; position: relative; z-index: 20;
   padding: env(safe-area-inset-top) max(14px, env(safe-area-inset-right)) 0 max(14px, env(safe-area-inset-left));
   background: var(--bar-bg);
-  -webkit-backdrop-filter: saturate(180%) blur(20px);
-  backdrop-filter: saturate(180%) blur(20px);
   border-bottom: .5px solid var(--sep);
 }
 .bar { height: 52px; display: flex; align-items: center; gap: 8px; max-width: 760px; margin: 0 auto; }
@@ -370,8 +369,6 @@ button.last { text-decoration: underline dotted rgba(142,142,147,.6); text-under
 #tabbar {
   flex: 0 0 auto; position: relative; z-index: 20;
   background: var(--bar-bg);
-  -webkit-backdrop-filter: saturate(180%) blur(20px);
-  backdrop-filter: saturate(180%) blur(20px);
   border-top: .5px solid var(--sep);
   padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
 }
@@ -440,13 +437,22 @@ button.last { text-decoration: underline dotted rgba(142,142,147,.6); text-under
 }
 #toast.show { opacity: 1; transform: translate(-50%, 0); }
 #update-bar {
-  position: fixed; left: 50%; bottom: calc(76px + env(safe-area-inset-bottom)); z-index: 150;
-  display: none; align-items: center; gap: 12px; width: max-content; max-width: calc(100vw - 32px);
-  padding: 6px 6px 6px 16px; border-radius: 24px; transform: translateX(-50%);
-  background: rgba(30,30,32,.94); color: #fff; font-size: 15px; font-weight: 500; box-shadow: 0 6px 20px rgba(0,0,0,.25);
+  position: fixed; left: 50%; bottom: calc(70px + env(safe-area-inset-bottom)); z-index: 150;
+  display: none; align-items: center; gap: 12px; width: min(560px, calc(100vw - 24px));
+  padding: 14px 14px 14px 16px; border-radius: 18px; transform: translateX(-50%);
+  background: var(--update); color: #fff; box-shadow: 0 10px 30px rgba(0,0,0,.35);
 }
-#update-bar.show { display: flex; }
-#update-bar button { border: 0; border-radius: 18px; padding: 8px 16px; background: var(--accent); color: #fff; font-weight: 600; }
+#update-bar.show { display: flex; animation: update-in .45s cubic-bezier(.2, .9, .3, 1.2); }
+@keyframes update-in { from { transform: translate(-50%, 140%); } to { transform: translate(-50%, 0); } }
+@media (prefers-reduced-motion: reduce) { #update-bar.show { animation: none; } }
+#update-bar .ico { flex: 0 0 auto; width: 28px; height: 28px; }
+#update-bar .upd-text { flex: 1; min-width: 0; }
+#update-bar b { display: block; font-size: 17px; font-weight: 700; }
+#update-bar small { display: block; font-size: 14px; opacity: .88; margin-top: 1px; }
+#update-bar button {
+  flex: 0 0 auto; border: 0; border-radius: 22px; padding: 11px 20px;
+  background: #fff; color: var(--update); font-size: 16px; font-weight: 700;
+}
 </style>
 </head>
 <body>
@@ -463,7 +469,11 @@ button.last { text-decoration: underline dotted rgba(142,142,147,.6); text-under
 <nav id="tabbar"><div class="tabs" id="tabs"></div></nav>
 <div id="modal-root"></div>
 <div id="toast" role="status" aria-live="polite"></div>
-<div id="update-bar" role="status"><span>New version available</span><button type="button" onclick="location.reload()">Reload</button></div>
+<div id="update-bar" role="status">
+  <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4.5v4h-4"/></svg>
+  <div class="upd-text"><b>Update available</b><small>Reload to get the latest version.</small></div>
+  <button type="button" onclick="location.reload()">Reload</button>
+</div>
 
 <script>
 'use strict';
